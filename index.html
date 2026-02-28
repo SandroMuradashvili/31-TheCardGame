@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BURA — Card Game</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700&family=Crimson+Pro:ital,wght@0,300;0,400;0,600;1,300;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0f0a;
+    --table: #0d2818;
+    --table-felt: #0f3020;
+    --gold: #c9a84c;
+    --gold-light: #e8c96a;
+    --cream: #f5ead8;
+    --red: #c0392b;
+    --red-bright: #e74c3c;
+    --card-bg: #fdf6e3;
+    --card-shadow: rgba(0,0,0,0.6);
+    --border: #1e4a2a;
+    --text-dim: #7a9a7a;
+    --trump-glow: #ffd700;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--cream);
+    font-family: 'Crimson Pro', Georgia, serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+    background-image:
+      radial-gradient(ellipse at 20% 0%, rgba(30,74,42,0.4) 0%, transparent 60%),
+      radial-gradient(ellipse at 80% 100%, rgba(30,74,42,0.3) 0%, transparent 60%);
+  }
+
+  /* ── HEADER ── */
+  .header {
+    text-align: center;
+    padding: 18px 20px 12px;
+    border-bottom: 1px solid rgba(201,168,76,0.2);
+    position: relative;
+  }
+  .header h1 {
+    font-family: 'Cinzel Decorative', serif;
+    font-size: 2.2rem;
+    color: var(--gold);
+    letter-spacing: 0.15em;
+    text-shadow: 0 0 40px rgba(201,168,76,0.4);
+  }
+  .header .subtitle {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+
+  /* ── SCOREBOARD ── */
+  .scoreboard {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 30px;
+    padding: 12px 20px;
+    background: rgba(0,0,0,0.3);
+    border-bottom: 1px solid rgba(201,168,76,0.15);
+  }
+  .score-block {
+    text-align: center;
+    min-width: 80px;
+  }
+  .score-name {
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .score-value {
+    font-family: 'Cinzel Decorative', serif;
+    font-size: 2rem;
+    color: var(--gold);
+    line-height: 1;
+  }
+  .score-divider {
+    font-family: 'Cinzel Decorative', serif;
+    font-size: 1rem;
+    color: var(--text-dim);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .score-pip { width: 4px; height: 4px; border-radius: 50%; background: var(--gold); opacity: 0.4; }
+
+  /* ── TRUMP INDICATOR ── */
+  .trump-bar {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    padding: 8px;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+  .trump-suit {
+    font-size: 1.4rem;
+    filter: drop-shadow(0 0 8px var(--trump-glow));
+  }
+  .trump-suit.hearts, .trump-suit.diamonds { color: #e74c3c; }
+  .trump-suit.clubs, .trump-suit.spades { color: #f5ead8; }
+  .stake-badge {
+    background: rgba(201,168,76,0.15);
+    border: 1px solid rgba(201,168,76,0.4);
+    color: var(--gold);
+    padding: 2px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+  }
+
+  /* ── MAIN LAYOUT ── */
+  .game-layout {
+    display: grid;
+    grid-template-columns: 1fr 260px;
+    gap: 0;
+    height: calc(100vh - 150px);
+    min-height: 500px;
+  }
+
+  /* ── TABLE AREA ── */
+  .table-area {
+    background:
+      radial-gradient(ellipse at 50% 50%, #133a20 0%, #0a2010 60%, #061408 100%);
+    border-right: 1px solid rgba(201,168,76,0.2);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+  .table-area::before {
+    content: '';
+    position: absolute;
+    inset: 20px;
+    border: 1px solid rgba(201,168,76,0.08);
+    border-radius: 50%;
+    pointer-events: none;
+  }
+
+  /* ── BOT AREA ── */
+  .bot-area {
+    padding: 16px 20px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .player-label {
+    font-size: 0.65rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .player-label .active-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--gold);
+    box-shadow: 0 0 8px var(--gold);
+    animation: pulse 1s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* ── CARD BACKS (bot hand) ── */
+  .bot-cards {
+    display: flex;
+    gap: -5px;
+    justify-content: center;
+  }
+  .card-back {
+    width: 48px;
+    height: 70px;
+    border-radius: 6px;
+    background:
+      repeating-linear-gradient(45deg, #1a3a25 0px, #1a3a25 4px, #0f2818 4px, #0f2818 8px);
+    border: 1px solid rgba(201,168,76,0.3);
+    box-shadow: 2px 2px 8px rgba(0,0,0,0.5);
+    position: relative;
+    margin: 0 -4px;
+  }
+  .card-back::after {
+    content: '⚜';
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%,-50%);
+    color: rgba(201,168,76,0.3);
+    font-size: 1.1rem;
+  }
+
+  /* ── TABLE CENTER ── */
+  .table-center {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 10px;
+  }
+
+  /* ── PLAYED CARDS ZONE ── */
+  .played-zone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    min-height: 100px;
+  }
+  .played-label {
+    font-size: 0.65rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .played-cards {
+    display: flex;
+    gap: 6px;
+    justify-content: center;
+    min-height: 80px;
+    align-items: center;
+  }
+
+  /* ── PLAYING CARD ── */
+  .card {
+    width: 54px;
+    height: 80px;
+    border-radius: 7px;
+    background: var(--card-bg);
+    border: 1px solid rgba(0,0,0,0.15);
+    box-shadow: 2px 4px 12px var(--card-shadow);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    position: relative;
+    user-select: none;
+    font-family: 'Crimson Pro', serif;
+  }
+  .card:hover { transform: translateY(-8px); box-shadow: 2px 8px 20px var(--card-shadow); }
+  .card.selected {
+    transform: translateY(-14px);
+    box-shadow: 0 12px 24px rgba(201,168,76,0.4), 0 0 0 2px var(--gold);
+  }
+  .card.trump {
+    box-shadow: 2px 4px 12px var(--card-shadow), 0 0 0 1px rgba(255,215,0,0.5);
+  }
+  .card.trump.selected {
+    box-shadow: 0 12px 24px rgba(255,215,0,0.5), 0 0 0 2px var(--trump-glow);
+  }
+  .card-rank {
+    font-size: 1.1rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .card-suit-icon {
+    font-size: 1.4rem;
+    line-height: 1;
+  }
+  .card-pts {
+    font-size: 0.55rem;
+    color: #888;
+    margin-top: 1px;
+  }
+  .card.hearts .card-rank, .card.hearts .card-suit-icon,
+  .card.diamonds .card-rank, .card.diamonds .card-suit-icon { color: var(--red); }
+  .card.clubs .card-rank, .card.clubs .card-suit-icon,
+  .card.spades .card-rank, .card.spades .card-suit-icon { color: #1a1a2e; }
+
+  .card-corner {
+    position: absolute;
+    top: 4px; left: 5px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .card-corner.bottom-right {
+    top: auto; left: auto;
+    bottom: 4px; right: 5px;
+    transform: rotate(180deg);
+  }
+  .card.hearts .card-corner, .card.diamonds .card-corner { color: var(--red); }
+  .card.clubs .card-corner, .card.spades .card-corner { color: #1a1a2e; }
+
+  /* ── SCORE PILES ── */
+  .piles-row {
+    display: flex;
+    gap: 30px;
+    align-items: center;
+  }
+  .pile-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .pile-score {
+    font-family: 'Cinzel Decorative', serif;
+    font-size: 1.3rem;
+    color: var(--gold);
+  }
+  .pile-label { font-size: 0.6rem; color: var(--text-dim); letter-spacing: 0.15em; text-transform: uppercase; }
+  .pile-visual {
+    width: 36px; height: 52px;
+    background: rgba(201,168,76,0.08);
+    border: 1px dashed rgba(201,168,76,0.2);
+    border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+
+  /* ── HUMAN HAND ── */
+  .human-area {
+    padding: 10px 20px 16px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .human-cards {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+  }
+  .human-cards .card { width: 60px; height: 88px; }
+  .human-cards .card-rank { font-size: 1.2rem; }
+  .human-cards .card-suit-icon { font-size: 1.5rem; }
+  .human-cards .card-corner { font-size: 0.85rem; }
+
+  /* ── ACTION BUTTONS ── */
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    padding: 8px 0;
+  }
+  .btn {
+    font-family: 'Crimson Pro', serif;
+    font-size: 0.85rem;
+    padding: 8px 18px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.05em;
+  }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn-primary {
+    background: var(--gold);
+    color: #1a0f00;
+    font-weight: 600;
+  }
+  .btn-primary:hover:not(:disabled) { background: var(--gold-light); transform: translateY(-1px); }
+  .btn-danger {
+    background: var(--red);
+    color: white;
+  }
+  .btn-danger:hover:not(:disabled) { background: var(--red-bright); }
+  .btn-ghost {
+    background: transparent;
+    border: 1px solid rgba(201,168,76,0.4);
+    color: var(--gold);
+  }
+  .btn-ghost:hover:not(:disabled) { background: rgba(201,168,76,0.1); }
+  .btn-success {
+    background: #27ae60;
+    color: white;
+    font-weight: 600;
+  }
+  .btn-success:hover:not(:disabled) { background: #2ecc71; }
+
+  /* ── STATUS BAR ── */
+  .status-bar {
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--cream);
+    font-style: italic;
+    min-height: 22px;
+  }
+  .status-bar.alert {
+    color: var(--gold);
+    font-style: normal;
+    font-weight: 600;
+  }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    background: rgba(0,0,0,0.4);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sidebar-section {
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .sidebar-title {
+    font-size: 0.6rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+  }
+
+  /* ── BOT THINKING ── */
+  .bot-thinking {
+    font-size: 0.78rem;
+    color: #9ab89a;
+    font-style: italic;
+    line-height: 1.5;
+    min-height: 40px;
+  }
+
+  /* ── GAME LOG ── */
+  .log-list {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .log-entry {
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    line-height: 1.4;
+  }
+  .log-entry.human { color: #a8c8a8; }
+  .log-entry.bot { color: #c8a8a8; }
+  .log-entry.system { color: var(--gold); opacity: 0.7; font-style: italic; }
+
+  /* ── ROUND RESULTS ── */
+  .round-result {
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    margin-bottom: 4px;
+  }
+  .round-result.win { background: rgba(39,174,96,0.15); border-left: 2px solid #27ae60; }
+  .round-result.lose { background: rgba(192,57,43,0.15); border-left: 2px solid #c0392b; }
+
+  /* ── STAKE CONTROLS ── */
+  .stake-controls {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .stake-btn {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 1px solid rgba(201,168,76,0.4);
+    background: transparent;
+    color: var(--gold);
+    font-family: 'Crimson Pro', serif;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .stake-btn:hover { background: rgba(201,168,76,0.2); }
+  .stake-btn.current { background: var(--gold); color: #1a0f00; font-weight: 700; }
+
+  /* ── MODAL ── */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+  }
+  .modal {
+    background: #0d1f14;
+    border: 1px solid rgba(201,168,76,0.3);
+    border-radius: 12px;
+    padding: 40px;
+    text-align: center;
+    max-width: 380px;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+  }
+  .modal h2 {
+    font-family: 'Cinzel Decorative', serif;
+    color: var(--gold);
+    font-size: 1.6rem;
+    margin-bottom: 16px;
+  }
+  .modal p { color: var(--cream); font-size: 1rem; margin-bottom: 20px; line-height: 1.6; }
+  .modal .btn { min-width: 120px; font-size: 0.95rem; }
+  .game-length-btns { display: flex; gap: 12px; justify-content: center; margin-bottom: 20px; }
+  .len-btn {
+    padding: 12px 28px;
+    border-radius: 6px;
+    border: 1px solid rgba(201,168,76,0.4);
+    background: transparent;
+    color: var(--gold);
+    font-family: 'Cinzel Decorative', serif;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .len-btn:hover, .len-btn.active { background: var(--gold); color: #1a0f00; }
+
+  /* ── NOTIFICATION TOAST ── */
+  .toast {
+    position: fixed;
+    top: 20px; left: 50%;
+    transform: translateX(-50%) translateY(-80px);
+    background: rgba(13,31,20,0.95);
+    border: 1px solid rgba(201,168,76,0.5);
+    color: var(--gold);
+    padding: 12px 24px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-family: 'Cinzel Decorative', serif;
+    letter-spacing: 0.05em;
+    z-index: 200;
+    transition: transform 0.3s ease;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  /* ── DECK COUNTER ── */
+  .deck-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+  .deck-icon {
+    width: 18px; height: 26px;
+    background: repeating-linear-gradient(45deg, #1a3a25 0px, #1a3a25 2px, #0f2818 2px, #0f2818 4px);
+    border: 1px solid rgba(201,168,76,0.3);
+    border-radius: 3px;
+  }
+
+  /* ── PROBABILITY BARS ── */
+  .prob-bars { display: flex; flex-direction: column; gap: 4px; }
+  .prob-row { display: flex; align-items: center; gap: 6px; font-size: 0.7rem; }
+  .prob-label { color: var(--text-dim); min-width: 70px; }
+  .prob-bar-bg { flex: 1; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden; }
+  .prob-bar-fill { height: 100%; border-radius: 3px; background: var(--gold); transition: width 0.5s; }
+  .prob-bar-fill.danger { background: #e74c3c; }
+  .prob-bar-fill.safe { background: #27ae60; }
+  .prob-value { color: var(--cream); min-width: 32px; text-align: right; }
+
+  /* ── ANIMATIONS ── */
+  @keyframes dealCard {
+    from { transform: translateY(-40px) scale(0.8); opacity: 0; }
+    to { transform: translateY(0) scale(1); opacity: 1; }
+  }
+  .card.deal-anim { animation: dealCard 0.3s ease forwards; }
+
+  @keyframes winPulse {
+    0% { box-shadow: 0 0 0 0 rgba(201,168,76,0.6); }
+    70% { box-shadow: 0 0 0 20px rgba(201,168,76,0); }
+    100% { box-shadow: 0 0 0 0 rgba(201,168,76,0); }
+  }
+  .win-pulse { animation: winPulse 0.8s ease-out; }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(201,168,76,0.3); border-radius: 2px; }
+
+  .hidden { display: none !important; }
+  .dimmed { opacity: 0.4; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<!-- HEADER -->
+<div class="header">
+  <h1>BURA</h1>
+  <div class="subtitle">Georgian Card Game</div>
+</div>
+
+<!-- SCOREBOARD -->
+<div class="scoreboard">
+  <div class="score-block">
+    <div class="score-name">You</div>
+    <div class="score-value" id="score-human">0</div>
+  </div>
+  <div class="score-divider">
+    <div class="score-pip"></div>
+    <span id="game-length-label" style="font-size:0.65rem;letter-spacing:0.15em;color:var(--text-dim)">TO 7</span>
+    <div class="score-pip"></div>
+  </div>
+  <div class="score-block">
+    <div class="score-name">Bot</div>
+    <div class="score-value" id="score-bot">0</div>
+  </div>
+</div>
+
+<!-- TRUMP + STAKE BAR -->
+<div class="trump-bar">
+  <div class="deck-info">
+    <div class="deck-icon"></div>
+    <span id="deck-count">14</span>
+  </div>
+  <span style="color:var(--text-dim);font-size:0.7rem;letter-spacing:0.15em">TRUMP</span>
+  <span class="trump-suit" id="trump-symbol">♥</span>
+  <span id="trump-name" style="font-size:0.75rem;color:var(--text-dim)">HEARTS</span>
+  <span class="stake-badge" id="stake-display">STAKE × 1</span>
+  <span id="round-display" style="font-size:0.7rem;color:var(--text-dim)">ROUND 1</span>
+</div>
+
+<!-- GAME LAYOUT -->
+<div class="game-layout">
+
+  <!-- TABLE -->
+  <div class="table-area">
+
+    <!-- BOT HAND -->
+    <div class="bot-area">
+      <div class="player-label">
+        <span>Bot</span>
+        <span class="active-dot hidden" id="bot-active-dot"></span>
+      </div>
+      <div class="bot-cards" id="bot-cards"></div>
+      <div style="font-size:0.7rem;color:var(--text-dim)" id="bot-score-pile-display">Pile: 0 pts</div>
+    </div>
+
+    <!-- CENTER TABLE -->
+    <div class="table-center">
+      <div class="played-zone">
+        <div class="played-label" id="played-label">— Waiting —</div>
+        <div class="played-cards" id="played-cards"></div>
+      </div>
+
+      <div class="piles-row">
+        <div class="pile-block">
+          <div class="pile-label">Your pile</div>
+          <div class="pile-visual" id="human-pile-visual">0</div>
+          <div class="pile-score" id="human-pile-pts">0 pts</div>
+        </div>
+        <div style="color:var(--text-dim);font-size:0.8rem">⚔</div>
+        <div class="pile-block">
+          <div class="pile-label">Bot pile</div>
+          <div class="pile-visual" id="bot-pile-visual">0</div>
+          <div class="pile-score" id="bot-pile-pts">0 pts</div>
+        </div>
+      </div>
+
+      <!-- STATUS -->
+      <div class="status-bar" id="status-bar">Starting new game...</div>
+
+      <!-- ACTIONS -->
+      <div class="actions" id="actions">
+        <!-- dynamically populated -->
+      </div>
+    </div>
+
+    <!-- HUMAN HAND -->
+    <div class="human-area">
+      <div class="player-label">
+        <span>You</span>
+        <span class="active-dot hidden" id="human-active-dot"></span>
+      </div>
+      <div class="human-cards" id="human-cards"></div>
+      <div style="font-size:0.7rem;color:var(--text-dim)" id="selection-hint"></div>
+    </div>
+
+  </div>
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+
+    <!-- BOT REASONING -->
+    <div class="sidebar-section">
+      <div class="sidebar-title">🤖 Bot Reasoning</div>
+      <div class="bot-thinking" id="bot-thinking">Waiting for game to start...</div>
+    </div>
+
+    <!-- WIN PROBABILITY -->
+    <div class="sidebar-section">
+      <div class="sidebar-title">📊 Probabilities</div>
+      <div class="prob-bars" id="prob-bars">
+        <div class="prob-row">
+          <div class="prob-label">Your win</div>
+          <div class="prob-bar-bg"><div class="prob-bar-fill safe" id="prob-win" style="width:50%"></div></div>
+          <div class="prob-value" id="prob-win-val">50%</div>
+        </div>
+        <div class="prob-row">
+          <div class="prob-label">Your score</div>
+          <div class="prob-bar-bg"><div class="prob-bar-fill" id="prob-score" style="width:0%"></div></div>
+          <div class="prob-value" id="prob-score-val">0/31</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROUND HISTORY -->
+    <div class="sidebar-section">
+      <div class="sidebar-title">📜 Round History</div>
+      <div id="round-history" style="font-size:0.72rem;color:var(--text-dim)">No rounds yet.</div>
+    </div>
+
+    <!-- GAME LOG -->
+    <div class="sidebar-section" style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+      <div class="sidebar-title">📋 Game Log</div>
+      <div class="log-list" id="game-log"></div>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- START MODAL -->
+<div class="modal-overlay" id="start-modal">
+  <div class="modal">
+    <h2>BURA</h2>
+    <p>A classic Georgian card game of skill, bluff, and calculation. You play against an AI opponent.</p>
+    <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:16px">Game length:</p>
+    <div class="game-length-btns">
+      <button class="len-btn active" id="len7" onclick="selectLength(7)">7</button>
+      <button class="len-btn" id="len11" onclick="selectLength(11)">11</button>
+    </div>
+    <button class="btn btn-primary" onclick="startGame()">Deal Cards</button>
+  </div>
+</div>
+
+<!-- GAME OVER MODAL -->
+<div class="modal-overlay hidden" id="gameover-modal">
+  <div class="modal">
+    <h2 id="gameover-title">You Win!</h2>
+    <p id="gameover-desc">Congratulations!</p>
+    <button class="btn btn-primary" onclick="showStartModal()">Play Again</button>
+  </div>
+</div>
+
+<script>
+const API = 'http://localhost:5000/api';
+let state = null;
+let selectedCards = [];
+let gameLength = 7;
+let awaitingResponse = false; // prevent double-clicks
+
+// ── Helpers ──────────────────────────────────
+
+function suitClass(suit) {
+  return suit; // hearts, diamonds, clubs, spades
+}
+
+function showToast(msg, duration=2000) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), duration);
+}
+
+function setStatus(msg, isAlert=false) {
+  const el = document.getElementById('status-bar');
+  el.textContent = msg;
+  el.className = 'status-bar' + (isAlert ? ' alert' : '');
+}
+
+function addLog(msg, type='system') {
+  const log = document.getElementById('game-log');
+  const entry = document.createElement('div');
+  entry.className = `log-entry ${type}`;
+  entry.textContent = msg;
+  log.prepend(entry);
+  // Keep max 30 entries
+  while (log.children.length > 30) log.lastChild.remove();
+}
+
+function selectLength(n) {
+  gameLength = n;
+  document.getElementById('len7').classList.toggle('active', n===7);
+  document.getElementById('len11').classList.toggle('active', n===11);
+}
+
+function showStartModal() {
+  document.getElementById('start-modal').classList.remove('hidden');
+  document.getElementById('gameover-modal').classList.add('hidden');
+}
+
+// ── Card rendering ──────────────────────────
+
+function renderCard(card, clickable=false, small=false) {
+  const div = document.createElement('div');
+  div.className = `card ${card.suit}`;
+  if (clickable) div.classList.add('clickable');
+  div.dataset.id = card.id;
+  div.dataset.suit = card.suit;
+
+  // Check if trump
+  if (state && card.suit === state.trump_suit) {
+    div.classList.add('trump');
+  }
+
+  const sym = card.symbol;
+
+  div.innerHTML = `
+    <div class="card-corner">${card.rank}<br>${sym}</div>
+    <div class="card-corner bottom-right">${card.rank}<br>${sym}</div>
+    <div class="card-rank">${card.rank}</div>
+    <div class="card-suit-icon">${sym}</div>
+    <div class="card-pts">${card.points}pt</div>
+  `;
+
+  if (clickable) {
+    div.addEventListener('click', () => toggleCardSelection(card.id, div));
+  }
+
+  return div;
+}
+
+function renderCardBack() {
+  const div = document.createElement('div');
+  div.className = 'card-back';
+  return div;
+}
+
+function toggleCardSelection(cardId, el) {
+  if (awaitingResponse) return;
+  const idx = selectedCards.indexOf(cardId);
+  if (idx >= 0) {
+    selectedCards.splice(idx, 1);
+    el.classList.remove('selected');
+  } else {
+    selectedCards.push(cardId);
+    el.classList.add('selected');
+  }
+  updateActions();
+  updateSelectionHint();
+}
+
+function clearSelection() {
+  selectedCards = [];
+  document.querySelectorAll('.card.selected').forEach(el => el.classList.remove('selected'));
+  updateSelectionHint();
+}
+
+function updateSelectionHint() {
+  const hint = document.getElementById('selection-hint');
+  if (!state) return;
+
+  if (selectedCards.length === 0) {
+    hint.textContent = '';
+    return;
+  }
+  // Check if all same suit
+  const cards = selectedCards.map(id => {
+    const [rank, suit] = id.split('_');
+    return state.human_hand.find(c => c.rank===rank && c.suit===suit);
+  }).filter(Boolean);
+
+  const suits = [...new Set(cards.map(c=>c.suit))];
+  const pts = cards.reduce((s,c)=>s+c.points,0);
+
+  if (suits.length > 1) {
+    hint.textContent = `⚠ Must be same suit`;
+    hint.style.color = 'var(--red-bright)';
+  } else {
+    hint.textContent = `${pts} pts selected`;
+    hint.style.color = 'var(--text-dim)';
+  }
+}
+
+// ── Render state ────────────────────────────
+
+function renderState(data) {
+  state = data.state;
+  const s = state;
+
+  // Scores
+  document.getElementById('score-human').textContent = s.game_scores[0];
+  document.getElementById('score-bot').textContent = s.game_scores[1];
+  document.getElementById('game-length-label').textContent = `TO ${s.game_length}`;
+
+  // Trump
+  const trumpEl = document.getElementById('trump-symbol');
+  trumpEl.textContent = s.trump_symbol;
+  trumpEl.className = `trump-suit ${s.trump_suit}`;
+  document.getElementById('trump-name').textContent = s.trump_suit.toUpperCase();
+
+  // Stake
+  document.getElementById('stake-display').textContent = `STAKE × ${s.current_stake}`;
+  document.getElementById('round-display').textContent = `ROUND ${s.round_number}`;
+
+  // Deck
+  document.getElementById('deck-count').textContent = s.deck_remaining;
+
+  // Bot hand (card backs)
+  const botCards = document.getElementById('bot-cards');
+  botCards.innerHTML = '';
+  for (let i=0; i<s.bot_hand_count; i++) botCards.appendChild(renderCardBack());
+
+  // Bot pile
+  document.getElementById('bot-score-pile-display').textContent = `Pile: ${s.bot_score_pile} pts`;
+  document.getElementById('bot-pile-pts').textContent = `${s.bot_score_pile} pts`;
+  document.getElementById('bot-pile-visual').textContent = s.bot_pile_cards.length;
+
+  // Human pile
+  document.getElementById('human-pile-pts').textContent = `${s.human_score_pile} pts`;
+  document.getElementById('human-pile-visual').textContent = s.human_pile_cards.length;
+
+  // Played cards
+  const playedArea = document.getElementById('played-cards');
+  playedArea.innerHTML = '';
+  const label = document.getElementById('played-label');
+  if (s.played_cards.length > 0) {
+    label.textContent = 'Cards on table';
+    s.played_cards.forEach(c => playedArea.appendChild(renderCard(c)));
+  } else {
+    label.textContent = '— Table —';
+  }
+
+  // Human hand
+  const humanCards = document.getElementById('human-cards');
+  humanCards.innerHTML = '';
+  const canInteract = s.human_is_active || s.phase === 'CUT_OR_PASS';
+  s.human_hand.forEach(c => {
+    const el = renderCard(c, true);
+    humanCards.appendChild(el);
+  });
+  // Re-apply selections
+  selectedCards.forEach(id => {
+    const el = humanCards.querySelector(`[data-id="${id}"]`);
+    if (el) el.classList.add('selected');
+  });
+
+  // Active dots
+  document.getElementById('human-active-dot').classList.toggle('hidden', !s.human_is_active);
+  document.getElementById('bot-active-dot').classList.toggle('hidden', s.human_is_active);
+
+  // Win probability (rough estimate)
+  const winProb = s.human_score_pile >= 31 ? 95 :
+    Math.round(Math.min(95, Math.max(5, (s.human_score_pile / 31) * 60 + 20)));
+  document.getElementById('prob-win').style.width = winProb + '%';
+  document.getElementById('prob-win').className = `prob-bar-fill ${winProb > 50 ? 'safe' : 'danger'}`;
+  document.getElementById('prob-win-val').textContent = winProb + '%';
+
+  const scoreProgress = Math.round(Math.min(100, (s.human_score_pile / 31) * 100));
+  document.getElementById('prob-score').style.width = scoreProgress + '%';
+  document.getElementById('prob-score-val').textContent = `${s.human_score_pile}/31`;
+
+  // Bot reasoning
+  if (data.bot_reasoning) {
+    document.getElementById('bot-thinking').textContent = data.bot_reasoning;
+  }
+
+  // Log
+  if (data.log) {
+    const logEl = document.getElementById('game-log');
+    logEl.innerHTML = '';
+    [...data.log].reverse().forEach(msg => {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry ' +
+        (msg.includes('Human') || msg.includes('plays') ? 'human' :
+         msg.includes('Bot') ? 'bot' : 'system');
+      entry.textContent = msg;
+      logEl.appendChild(entry);
+    });
+  }
+
+  // Round history
+  if (data.round_results && data.round_results.length > 0) {
+    const hist = document.getElementById('round-history');
+    hist.innerHTML = '';
+    [...data.round_results].reverse().forEach(r => {
+      const div = document.createElement('div');
+      div.className = `round-result ${r.winner===0?'win':'lose'}`;
+      const reasonMap = {
+        'calculated': '🧮 Calculated',
+        'calculated_failed': '💀 Failed calc',
+        'three_trumps': '🃏 3 Trumps',
+        'declined_raise': '✋ Stake declined'
+      };
+      div.textContent = `${r.winner_name} +${r.stake}pt  ${reasonMap[r.reason]||r.reason}`;
+      hist.appendChild(div);
+    });
+  }
+
+  // Phase-based status and actions
+  updatePhaseUI(s);
+
+  // Check game over
+  if (s.game_over || s.phase === 'GAME_OVER') {
+    const winner = s.winner;
+    const modal = document.getElementById('gameover-modal');
+    document.getElementById('gameover-title').textContent = winner === 0 ? '🏆 You Win!' : '💀 Bot Wins';
+    document.getElementById('gameover-desc').textContent =
+      winner === 0
+        ? `You won the game ${s.game_scores[0]}–${s.game_scores[1]}!`
+        : `The bot won ${s.game_scores[1]}–${s.game_scores[0]}. Better luck next time!`;
+    modal.classList.remove('hidden');
+  }
+}
+
+function updatePhaseUI(s) {
+  const actionsEl = document.getElementById('actions');
+  actionsEl.innerHTML = '';
+
+  // Disable hand interaction based on phase
+  const handEl = document.getElementById('human-cards');
+
+  if (!s.human_is_active && s.phase !== 'CUT_OR_PASS') {
+    handEl.classList.add('dimmed');
+    setStatus('Bot is thinking...');
+    return;
+  }
+  handEl.classList.remove('dimmed');
+
+  if (s.phase === 'STAKE_OFFER') {
+    if (s.stake_last_raised_by === 1) {
+      // Bot raised — human must respond
+      setStatus(`Bot raised stakes to ${s.current_stake}! Accept or decline?`, true);
+      addBtn(actionsEl, '✓ Accept', 'btn-success', () => sendMove({type:'accept_raise'}));
+      addBtn(actionsEl, '✗ Decline', 'btn-danger', () => sendMove({type:'decline_raise'}));
+    } else {
+      // Human can raise or continue
+      setStatus('Your turn — raise stakes or play?');
+      if (s.current_stake < 6) {
+        addBtn(actionsEl, `↑ Raise to ${s.current_stake+1}`, 'btn-ghost', () => sendMove({type:'raise', new_stake: s.current_stake+1}));
+      }
+      addBtn(actionsEl, '▶ Play Cards', 'btn-primary', () => {
+        // Transition to play phase
+        sendMove({type:'continue'});
+      });
+    }
+  }
+
+  else if (s.phase === 'PLAY') {
+    setStatus('Select cards to play (same suit)');
+    const playBtn = addBtn(actionsEl, 'Play Selected', 'btn-primary', () => {
+      if (selectedCards.length === 0) { showToast('Select cards first!'); return; }
+      sendMove({type:'play', cards: selectedCards});
+      clearSelection();
+    });
+    // Stake raise option
+    if (s.current_stake < 6) {
+      addBtn(actionsEl, `↑ Raise Stakes`, 'btn-ghost', () => sendMove({type:'raise', new_stake: s.current_stake+1}));
+    }
+  }
+
+  else if (s.phase === 'CUT_OR_PASS') {
+    if (s.active_player === 1) {
+      // Bot played, human must respond
+      setStatus('Bot played! Cut (beat them) or Pass?', true);
+      addBtn(actionsEl, '⚔ Cut (select cards)', 'btn-primary', () => {
+        if (selectedCards.length !== s.played_cards.length) {
+          showToast(`Select exactly ${s.played_cards.length} card(s)!`); return;
+        }
+        sendMove({type:'cut', cards: selectedCards});
+        clearSelection();
+      });
+      addBtn(actionsEl, '↩ Pass (select cards)', 'btn-danger', () => {
+        if (selectedCards.length !== s.played_cards.length) {
+          showToast(`Select exactly ${s.played_cards.length} card(s) to pass!`); return;
+        }
+        sendMove({type:'pass', cards: selectedCards});
+        clearSelection();
+      });
+      document.getElementById('selection-hint').textContent = `Select ${s.played_cards.length} card(s)`;
+    } else {
+      // Human played, bot responding — wait
+      setStatus('Waiting for bot response...');
+    }
+  }
+
+  else if (s.phase === 'CALCULATE') {
+    if (s.last_taker === 0 && s.calculate_available) {
+      setStatus(`Calculate? Your pile: ${s.human_score_pile} pts`, s.human_score_pile >= 31);
+      if (s.human_score_pile >= 31) {
+        addBtn(actionsEl, `🧮 Calculate (${s.human_score_pile} pts!)`, 'btn-success', () => sendMove({type:'calculate'}));
+      }
+      addBtn(actionsEl, '▶ Continue', 'btn-ghost', () => sendMove({type:'continue'}));
+    } else {
+      setStatus('Waiting...');
+    }
+  }
+
+  else if (s.phase === 'DRAW' || s.phase === 'ROUND_OVER') {
+    setStatus('Round continuing...');
+  }
+}
+
+function addBtn(container, label, cls, handler) {
+  const btn = document.createElement('button');
+  btn.className = `btn ${cls}`;
+  btn.textContent = label;
+  btn.onclick = handler;
+  container.appendChild(btn);
+  return btn;
+}
+
+// ── API calls ───────────────────────────────
+
+async function startGame() {
+  document.getElementById('start-modal').classList.add('hidden');
+  selectedCards = [];
+  awaitingResponse = true;
+
+  try {
+    const resp = await fetch(`${API}/new_game`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({game_length: gameLength})
+    });
+    const data = await resp.json();
+    awaitingResponse = false;
+    renderState(data);
+    showToast(`New game! Trump: ${data.state.trump_suit}`);
+  } catch(e) {
+    awaitingResponse = false;
+    setStatus('Error connecting to server. Make sure server is running!');
+    console.error(e);
+  }
+}
+
+async function sendMove(move) {
+  if (awaitingResponse) return;
+  awaitingResponse = true;
+
+  const actionsEl = document.getElementById('actions');
+  actionsEl.querySelectorAll('.btn').forEach(b => b.disabled = true);
+  setStatus('Processing...');
+
+  try {
+    const resp = await fetch(`${API}/move`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(move)
+    });
+    const data = await resp.json();
+    awaitingResponse = false;
+
+    if (data.error) {
+      setStatus(`Error: ${data.error}`);
+      showToast(`⚠ ${data.error}`);
+      // Re-fetch state
+      const stateResp = await fetch(`${API}/state`);
+      const stateData = await stateResp.json();
+      renderState(stateData);
+      return;
+    }
+
+    renderState(data);
+
+    // Show notable events
+    if (data.round_results && data.round_results.length > 0) {
+      const last = data.round_results[data.round_results.length-1];
+      if (last.reason === 'three_trumps') showToast('🃏 THREE TRUMPS — Instant Win!', 3000);
+      else if (last.reason === 'calculated') showToast(`🧮 Calculated! ${last.score} pts`, 2500);
+      else if (last.reason === 'calculated_failed') showToast(`💀 Calculation failed! Only ${last.score} pts`, 2500);
+      else if (last.reason === 'declined_raise') showToast('✋ Stakes declined!', 2000);
+    }
+
+  } catch(e) {
+    awaitingResponse = false;
+    setStatus('Error sending move.');
+    console.error(e);
+  }
+}
+
+// Start on load
+window.addEventListener('load', () => {
+  // Show start modal
+  document.getElementById('start-modal').classList.remove('hidden');
+});
+</script>
+</body>
+</html>
