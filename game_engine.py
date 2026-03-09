@@ -1,13 +1,13 @@
 """
-BURA (Thirty-One / Cutter) Game Engine
-Pure game logic — no Flask, no I/O. Easily adaptable for AI bots, tournaments, multiplayer.
+BURA (Thirty-One / Cutter) Game Engine  v2
+Pure game logic — no Flask, no I/O.
 """
 
 import random
 from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Optional
-import copy
+from itertools import combinations
 
 
 # ─────────────────────────────────────────────
@@ -35,27 +35,24 @@ POINT_VALUES = {
     Rank.JACK:  2,
 }
 
-# Rank order for cutting (higher index = higher value)
 RANK_ORDER = [Rank.JACK, Rank.QUEEN, Rank.KING, Rank.TEN, Rank.ACE]
 
 class GamePhase(str, Enum):
-    WAITING         = "waiting"          # Between rounds or at start
-    STAKES          = "stakes"           # Stake negotiation phase
-    PLAYING         = "playing"          # Active player plays cards
-    CUTTING         = "cutting"          # Opponent decides to cut or pass
-    FORCED_CUT      = "forced_cut"       # Maliutka — opponent MUST try to cut
-    CALCULATING     = "calculating"      # Right-to-calculate moment
-    ROUND_OVER      = "round_over"       # Round just ended, show result
-    GAME_OVER       = "game_over"        # Game complete
+    WAITING      = "waiting"
+    STAKES       = "stakes"
+    PLAYING      = "playing"
+    CUTTING      = "cutting"
+    FORCED_CUT   = "forced_cut"
+    CALCULATING  = "calculating"
+    ROUND_OVER   = "round_over"
+    GAME_OVER    = "game_over"
 
 class RoundEndReason(str, Enum):
-    CALCULATED_WIN      = "calculated_win"
-    CALCULATED_LOSE     = "calculated_lose"
-    THREE_TRUMPS        = "three_trumps"
-    STAKE_DECLINED      = "stake_declined"
-    DECK_EXHAUSTED      = "deck_exhausted"
-    MALIUTKA_CUT        = "maliutka_cut"
-    MALIUTKA_PASS       = "maliutka_pass"
+    CALCULATED_WIN  = "calculated_win"
+    CALCULATED_LOSE = "calculated_lose"
+    THREE_TRUMPS    = "three_trumps"
+    STAKE_DECLINED  = "stake_declined"
+    DECK_EXHAUSTED  = "deck_exhausted"
 
 
 # ─────────────────────────────────────────────
@@ -70,10 +67,6 @@ class Card:
     @property
     def points(self) -> int:
         return POINT_VALUES[self.rank]
-
-    @property
-    def rank_index(self) -> int:
-        return RANK_ORDER.index(self.rank)
 
     def __repr__(self):
         return f"{self.rank.value}{self.suit.value[0].upper()}"
@@ -96,9 +89,6 @@ class Deck:
     def __init__(self):
         self.cards: list[Card] = []
         self.trump_card: Optional[Card] = None
-        self._build()
-
-    def _build(self):
         self.cards = [Card(suit, rank) for suit in Suit for rank in Rank]
 
     def shuffle(self):
@@ -110,7 +100,6 @@ class Deck:
         return dealt
 
     def reveal_trump(self):
-        """Place the bottom card face up; it stays in deck until drawn naturally."""
         if self.cards:
             self.trump_card = self.cards[-1]
         return self.trump_card
@@ -132,7 +121,7 @@ class Deck:
 
 
 # ─────────────────────────────────────────────
-# PLAYER (abstract — supports Human & Bot)
+# PLAYER
 # ─────────────────────────────────────────────
 
 class Player(ABC):
@@ -140,19 +129,31 @@ class Player(ABC):
         self.player_id = player_id
         self.name = name
         self.hand: list[Card] = []
-        self.score_pile: list[Card] = []      # Cards they've won
-        self.hidden_pile: list[Card] = []     # Cards passed to them (unknown origin)
-        self.game_score: int = 0              # Running total toward 7/11
+        self.score_pile: list[Card] = []   # Cards whose faces are known to player
+        self.hidden_pile: list[Card] = []  # Cards passed by opponent — content unknown
+        self.game_score: int = 0
+
+    @property
+    def known_pile_points(self) -> int:
+        return sum(c.points for c in self.score_pile)
+
+    @property
+    def hidden_card_count(self) -> int:
+        return len(self.hidden_pile)
 
     @property
     def pile_points(self) -> int:
+        """True total — used only internally / debug / at calculate reveal."""
         return sum(c.points for c in self.score_pile) + sum(c.points for c in self.hidden_pile)
+
+    @property
+    def pile_count(self) -> int:
+        return len(self.score_pile) + len(self.hidden_pile)
 
     def draw_to_three(self, deck: Deck):
         need = 3 - len(self.hand)
         if need > 0 and len(deck) > 0:
-            drawn = deck.deal(min(need, len(deck)))
-            self.hand.extend(drawn)
+            self.hand.extend(deck.deal(min(need, len(deck))))
 
     def add_to_pile(self, cards: list[Card], hidden: bool = False):
         if hidden:
@@ -160,27 +161,31 @@ class Player(ABC):
         else:
             self.score_pile.extend(cards)
 
-    def remove_from_hand(self, cards: list[Card]) -> bool:
-        for card in cards:
-            if card not in self.hand:
-                return False
-        for card in cards:
-            self.hand.remove(card)
-        return True
+    def remove_from_hand(self, cards: list[Card]):
+        for c in cards:
+            self.hand.remove(c)
 
     def reset_round(self):
         self.hand = []
         self.score_pile = []
         self.hidden_pile = []
 
-    def to_dict(self, reveal_hand=False, reveal_pile=True) -> dict:
+    def to_dict(self, reveal_hand=False, debug=False) -> dict:
         return {
             "id": self.player_id,
             "name": self.name,
             "hand": [c.to_dict() for c in self.hand] if reveal_hand else [{"hidden": True} for _ in self.hand],
             "hand_count": len(self.hand),
-            "pile_points": self.pile_points if reveal_pile else None,
-            "pile_count": len(self.score_pile) + len(self.hidden_pile),
+            # What the owner is allowed to know (no cheating):
+            "known_pile_points": self.known_pile_points,
+            "hidden_card_count": self.hidden_card_count,
+            "hidden_min_points": self.hidden_card_count * POINT_VALUES[Rank.JACK],
+            "hidden_max_points": self.hidden_card_count * POINT_VALUES[Rank.ACE],
+            "pile_count": self.pile_count,
+            # True total only in debug / at calculate time:
+            "pile_points": self.pile_points if debug else None,
+            "pile_cards": [c.to_dict() for c in self.score_pile] if debug else [],
+            "hidden_pile_cards": [c.to_dict() for c in self.hidden_pile] if debug else [],
             "game_score": self.game_score,
             "type": self.__class__.__name__,
         }
@@ -196,25 +201,25 @@ class HumanPlayer(Player):
 
 
 class BotPlayer(Player):
-    """Stub — subclass and override choose_* methods for AI implementations."""
     def is_human(self) -> bool:
         return False
 
-    def choose_play(self, game_state: dict) -> list[Card]:
-        raise NotImplementedError("Bot subclass must implement choose_play")
+    def choose_play(self, engine) -> list[str]:
+        raise NotImplementedError
 
-    def choose_cut_or_pass(self, played_cards: list[Card], game_state: dict):
-        raise NotImplementedError("Bot subclass must implement choose_cut_or_pass")
+    def choose_cut_or_pass(self, engine):
+        raise NotImplementedError
 
-    def choose_calculate(self, game_state: dict) -> bool:
-        raise NotImplementedError("Bot subclass must implement choose_calculate")
+    def choose_calculate(self, engine) -> bool:
+        raise NotImplementedError
 
-    def choose_stake(self, current_stake: int, game_state: dict) -> Optional[int]:
-        raise NotImplementedError("Bot subclass must implement choose_stake")
+    def choose_raise_stake(self, engine) -> bool:
+        """Return True to raise stake by 1."""
+        raise NotImplementedError
 
 
 # ─────────────────────────────────────────────
-# MOVE HISTORY
+# MOVE LOG
 # ─────────────────────────────────────────────
 
 class MoveRecord:
@@ -233,12 +238,13 @@ class MoveRecord:
 
 class GameEngine:
     """
-    Pure game logic. No I/O. Thread-safe when used with a single game per instance.
-
-    State machine:
-        WAITING → STAKES → PLAYING → CUTTING/FORCED_CUT → CALCULATING → PLAYING … → ROUND_OVER → WAITING
-                                                                                              ↓
-                                                                                         GAME_OVER
+    STAKE RULES (corrected vs v1):
+    - Stake starts at 1. Max is 6.
+    - Either player can raise by exactly 1 at any point during STAKES phase.
+    - Once player A raises, player B must respond: accept / decline / raise-further.
+    - Player A cannot raise again until player B has acted.
+    - Playing cards directly (without pressing "raise") = implicitly no raise wanted.
+    - play_cards() auto-transitions from STAKES → PLAYING (accepting any pending stake).
     """
 
     def __init__(self, player1: Player, player2: Player, target_score: int = 7):
@@ -247,21 +253,19 @@ class GameEngine:
         self.deck = Deck()
         self.phase = GamePhase.WAITING
         self.current_stake = 1
-        self.pending_stake = 1           # Stake being offered but not accepted yet
+        self.pending_stake = 1
         self.stake_offerer_idx: Optional[int] = None
-        self.active_idx: int = 0         # Index of active player
-        self.calculator_idx: Optional[int] = None  # Who has right to calculate
-        self.played_cards: list[Card] = []  # Cards on the "table"
-        self.playing_player_idx: Optional[int] = None  # Who played current cards
+        self.active_idx: int = 0
+        self.calculator_idx: Optional[int] = None
+        self.played_cards: list[Card] = []
+        self.playing_player_idx: Optional[int] = None
         self.last_round_winner_idx: Optional[int] = None
         self.round_number: int = 0
         self.move_history: list[MoveRecord] = []
         self.round_end_reason: Optional[RoundEndReason] = None
         self.round_winner_idx: Optional[int] = None
         self.is_maliutka: bool = False
-        self.error: Optional[str] = None  # Last validation error
-
-    # ── helpers ──────────────────────────────
+        self.error: Optional[str] = None
 
     @property
     def active_player(self) -> Player:
@@ -272,10 +276,6 @@ class GameEngine:
         return 1 - self.active_idx
 
     @property
-    def opponent(self) -> Player:
-        return self.players[self.opponent_idx]
-
-    @property
     def trump_suit(self) -> Optional[Suit]:
         return self.deck.trump_suit
 
@@ -283,7 +283,6 @@ class GameEngine:
         self.move_history.append(MoveRecord(move_type, player_id, data))
 
     def _cards_from_ids(self, player: Player, card_ids: list[str]) -> list[Card]:
-        """Resolve card ids like 'AH' back to Card objects from player's hand."""
         result = []
         for cid in card_ids:
             found = next((c for c in player.hand if repr(c) == cid), None)
@@ -292,75 +291,46 @@ class GameEngine:
             result.append(found)
         return result
 
-    # ── validation helpers ────────────────────
+    # ── validation ────────────────────────────
 
     def _validate_play(self, cards: list[Card]) -> Optional[str]:
         if not cards:
             return "Must play at least 1 card."
         if len(cards) > 3:
             return "Cannot play more than 3 cards."
-        suits = {c.suit for c in cards}
-        if len(suits) > 1:
+        if len({c.suit for c in cards}) > 1:
             return "All played cards must be the same suit."
         return None
 
     def _can_cut(self, played: list[Card], cut_attempt: list[Card]) -> bool:
-        """
-        Returns True if cut_attempt beats played.
-        Rules:
-          - Must play same number of cards
-          - If played are all non-trump: cut must be same suit with strictly higher TOTAL value
-            OR all trump cards (any value beats non-trump)
-          - If played are all trump: cut must be all trump AND strictly higher total value
-        """
         if len(cut_attempt) != len(played):
             return False
-
-        played_suit = played[0].suit
-        cut_suit = cut_attempt[0].suit
-
-        # All cut cards must be same suit
         if len({c.suit for c in cut_attempt}) > 1:
             return False
-
+        played_suit = played[0].suit
+        cut_suit = cut_attempt[0].suit
         played_is_trump = played_suit == self.trump_suit
         cut_is_trump = cut_suit == self.trump_suit
-
         played_total = sum(c.points for c in played)
         cut_total = sum(c.points for c in cut_attempt)
-
         if played_is_trump:
-            # Only higher trump beats trump
             return cut_is_trump and cut_total > played_total
-        else:
-            # Same suit beats with higher value
-            if cut_suit == played_suit:
-                return cut_total > played_total
-            # Trump beats any non-trump
-            if cut_is_trump:
-                return True
-            return False
+        if cut_suit == played_suit:
+            return cut_total > played_total
+        return cut_is_trump  # trump beats non-trump
 
     def _is_three_trumps(self, cards: list[Card]) -> bool:
-        return (
-            len(cards) == 3
-            and self.trump_suit is not None
-            and all(c.suit == self.trump_suit for c in cards)
-        )
+        return len(cards) == 3 and self.trump_suit is not None and all(c.suit == self.trump_suit for c in cards)
 
     def _is_maliutka(self, cards: list[Card]) -> bool:
-        """3 same-suit non-trump cards."""
         if len(cards) != 3:
             return False
         suits = {c.suit for c in cards}
-        if len(suits) != 1:
-            return False
-        return list(suits)[0] != self.trump_suit
+        return len(suits) == 1 and list(suits)[0] != self.trump_suit
 
     # ── round lifecycle ───────────────────────
 
     def start_round(self):
-        """Initialize a new round. Call after WAITING phase."""
         self.round_number += 1
         self.current_stake = 1
         self.pending_stake = 1
@@ -378,19 +348,11 @@ class GameEngine:
 
         self.deck = Deck()
         self.deck.shuffle()
-
-        # Deal 3 cards each
         for p in self.players:
             p.hand = self.deck.deal(3)
-
         self.deck.reveal_trump()
 
-        # Active player: winner of last round goes first; first round is random
-        if self.last_round_winner_idx is not None:
-            self.active_idx = self.last_round_winner_idx
-        else:
-            self.active_idx = random.randint(0, 1)
-
+        self.active_idx = self.last_round_winner_idx if self.last_round_winner_idx is not None else random.randint(0, 1)
         self.phase = GamePhase.STAKES
         self._log("round_start", "system", {
             "round": self.round_number,
@@ -398,88 +360,87 @@ class GameEngine:
             "first_player": self.active_player.player_id,
         })
 
-    # ── STAKES PHASE ─────────────────────────
+    # ── STAKES ───────────────────────────────
 
-    def offer_stake(self, player_idx: int, new_stake: int) -> bool:
-        """
-        Either player can offer to raise the stake before any cards are played.
-        Returns True on success.
-        """
-        self.error = None
+    def can_raise_stake(self, player_idx: int) -> bool:
+        """True if this player is currently allowed to raise the stake."""
         if self.phase != GamePhase.STAKES:
-            self.error = "Cannot raise stakes now."
             return False
-        if new_stake <= self.current_stake or new_stake > 6:
-            self.error = f"Stake must be between {self.current_stake + 1} and 6."
+        if self.current_stake >= 6:
             return False
+        # Can't raise if you just raised (must wait for opponent to respond)
         if self.stake_offerer_idx is not None and self.stake_offerer_idx == player_idx:
-            self.error = "Cannot raise your own pending offer."
             return False
+        # Can't raise beyond 6
+        base = self.pending_stake if self.stake_offerer_idx is not None else self.current_stake
+        return base + 1 <= 6
 
-        self.pending_stake = new_stake
+    def offer_stake(self, player_idx: int) -> bool:
+        """Raise stake by exactly 1. Returns True on success."""
+        self.error = None
+        if not self.can_raise_stake(player_idx):
+            self.error = "You cannot raise the stake right now."
+            return False
+        base = self.pending_stake if self.stake_offerer_idx is not None else self.current_stake
+        self.pending_stake = base + 1
         self.stake_offerer_idx = player_idx
-        self._log("stake_offer", self.players[player_idx].player_id, {"stake": new_stake})
+        self._log("stake_offer", self.players[player_idx].player_id, {"stake": self.pending_stake})
         return True
 
     def accept_stake(self, player_idx: int) -> bool:
-        """Accepting player agrees to play at the new stake."""
         self.error = None
-        if self.phase != GamePhase.STAKES:
-            self.error = "No pending stake to accept."
-            return False
         if self.stake_offerer_idx is None:
             self.error = "No stake offer pending."
             return False
         if player_idx == self.stake_offerer_idx:
             self.error = "Cannot accept your own offer."
             return False
-
         self.current_stake = self.pending_stake
         self.stake_offerer_idx = None
         self._log("stake_accept", self.players[player_idx].player_id, {"stake": self.current_stake})
         return True
 
     def decline_stake(self, player_idx: int) -> bool:
-        """Declining player forfeits the round; offerer wins at previous stake."""
+        """Offerer wins at the stake BEFORE their offer."""
         self.error = None
-        if self.phase != GamePhase.STAKES:
-            self.error = "No pending stake to decline."
-            return False
         if self.stake_offerer_idx is None:
             self.error = "No stake offer pending."
             return False
         if player_idx == self.stake_offerer_idx:
             self.error = "Cannot decline your own offer."
             return False
-
         winner_idx = self.stake_offerer_idx
-        # Win at PREVIOUS (current before the offer) stake
-        win_stake = self.current_stake
+        win_stake = self.current_stake  # previous stake, not pending
         self._log("stake_decline", self.players[player_idx].player_id, {
-            "stake": win_stake,
+            "declined_stake": self.pending_stake,
+            "win_stake": win_stake,
             "winner": self.players[winner_idx].player_id
         })
         self._end_round(winner_idx, win_stake, RoundEndReason.STAKE_DECLINED)
         return True
 
     def start_play(self) -> bool:
-        """Transition from STAKES to PLAYING (skip stake negotiation)."""
+        """Transition STAKES → PLAYING. Silently accepts pending stake if any."""
         self.error = None
+        if self.phase == GamePhase.PLAYING:
+            return True
         if self.phase != GamePhase.STAKES:
             self.error = "Not in stakes phase."
             return False
         if self.stake_offerer_idx is not None:
-            self.error = "Pending stake must be resolved first."
-            return False
+            self.current_stake = self.pending_stake
+            self.stake_offerer_idx = None
         self.phase = GamePhase.PLAYING
         self._log("play_start", "system", {"stake": self.current_stake})
         return True
 
-    # ── PLAYING PHASE ────────────────────────
+    # ── PLAYING ──────────────────────────────
 
     def play_cards(self, player_idx: int, card_ids: list[str]) -> bool:
-        """Active player plays 1-3 cards of same suit."""
+        """Play 1-3 same-suit cards. Auto-starts play if still in STAKES."""
         self.error = None
+        if self.phase == GamePhase.STAKES:
+            self.start_play()
         if self.phase != GamePhase.PLAYING:
             self.error = "Not in playing phase."
             return False
@@ -492,13 +453,11 @@ class GameEngine:
         if not cards:
             self.error = "Invalid card selection."
             return False
-
         err = self._validate_play(cards)
         if err:
             self.error = err
             return False
 
-        # Check three trumps — instant win
         if self._is_three_trumps(cards):
             player.remove_from_hand(cards)
             player.add_to_pile(cards)
@@ -506,117 +465,83 @@ class GameEngine:
             self._end_round(player_idx, self.current_stake, RoundEndReason.THREE_TRUMPS)
             return True
 
-        # Check Maliutka
         self.is_maliutka = self._is_maliutka(cards)
-
         player.remove_from_hand(cards)
         self.played_cards = cards
         self.playing_player_idx = player_idx
-
         self._log("play", player.player_id, {
             "cards": [repr(c) for c in cards],
             "is_maliutka": self.is_maliutka
         })
-
-        if self.is_maliutka:
-            self.phase = GamePhase.FORCED_CUT
-        else:
-            self.phase = GamePhase.CUTTING
+        self.phase = GamePhase.FORCED_CUT if self.is_maliutka else GamePhase.CUTTING
         return True
 
-    # ── CUTTING PHASE ────────────────────────
+    # ── CUTTING ──────────────────────────────
 
     def cut_cards(self, player_idx: int, card_ids: list[str]) -> bool:
-        """
-        Opponent attempts to cut.
-        In CUTTING phase: optional.
-        In FORCED_CUT phase: mandatory attempt (but may fail).
-        """
         self.error = None
         if self.phase not in (GamePhase.CUTTING, GamePhase.FORCED_CUT):
             self.error = "Not in cutting phase."
             return False
         if player_idx == self.playing_player_idx:
-            self.error = "You cannot cut your own cards."
+            self.error = "Cannot cut your own cards."
             return False
-
         cutter = self.players[player_idx]
         cut_cards = self._cards_from_ids(cutter, card_ids)
         if not cut_cards:
             self.error = "Invalid card selection."
             return False
-
         if not self._can_cut(self.played_cards, cut_cards):
             self.error = "These cards cannot beat the played cards."
             return False
 
-        # Successful cut
         cutter.remove_from_hand(cut_cards)
-        all_cards = self.played_cards + cut_cards
-        cutter.add_to_pile(all_cards)
+        cutter.add_to_pile(self.played_cards + cut_cards, hidden=False)
         self.calculator_idx = player_idx
-        self.active_idx = player_idx  # Cutter goes first next turn
-
+        self.active_idx = player_idx
         self._log("cut", cutter.player_id, {
             "cut_cards": [repr(c) for c in cut_cards],
             "played_cards": [repr(c) for c in self.played_cards],
-            "is_maliutka": self.is_maliutka
         })
-
         self.played_cards = []
         self.is_maliutka = False
         self.phase = GamePhase.CALCULATING
         return True
 
     def pass_cards(self, player_idx: int, card_ids: list[str]) -> bool:
-        """
-        Opponent passes cards (cannot or chooses not to cut).
-        Not allowed during FORCED_CUT if a valid cut exists — but we leave enforcement
-        to the UI/bot; the engine accepts it and the player loses those cards.
-        Actually: in Maliutka the opponent MUST attempt to cut. If they physically
-        cannot cut (no valid combination), they pass. Engine allows pass always —
-        UI should only show pass when no valid cut exists during FORCED_CUT.
-        """
         self.error = None
         if self.phase not in (GamePhase.CUTTING, GamePhase.FORCED_CUT):
             self.error = "Not in cutting phase."
             return False
         if player_idx == self.playing_player_idx:
-            self.error = "You cannot pass your own cards."
+            self.error = "Cannot pass your own cards."
             return False
-
         passer = self.players[player_idx]
-        pass_cards_list = self._cards_from_ids(passer, card_ids)
-        if not pass_cards_list:
+        pass_list = self._cards_from_ids(passer, card_ids)
+        if not pass_list:
             self.error = "Invalid card selection."
             return False
-        if len(pass_cards_list) != len(self.played_cards):
+        if len(pass_list) != len(self.played_cards):
             self.error = f"Must pass exactly {len(self.played_cards)} card(s)."
             return False
 
-        passer.remove_from_hand(pass_cards_list)
-
-        # Played cards go to playing_player's pile (known), passed cards go hidden
+        passer.remove_from_hand(pass_list)
         playing_player = self.players[self.playing_player_idx]
-        playing_player.add_to_pile(self.played_cards, hidden=False)
-        playing_player.add_to_pile(pass_cards_list, hidden=True)
+        playing_player.add_to_pile(self.played_cards, hidden=False)  # own cards back — known
+        playing_player.add_to_pile(pass_list, hidden=True)            # opponent's — hidden
         self.calculator_idx = self.playing_player_idx
-        self.active_idx = self.playing_player_idx  # Original player keeps going
-
+        self.active_idx = self.playing_player_idx
         self._log("pass", passer.player_id, {
-            "passed_count": len(pass_cards_list),
-            "played_cards": [repr(c) for c in self.played_cards],
+            "passed_count": len(pass_list),
         })
-
         self.played_cards = []
         self.is_maliutka = False
         self.phase = GamePhase.CALCULATING
         return True
 
-    # ── CALCULATING PHASE ────────────────────
+    # ── CALCULATING ──────────────────────────
 
     def calculate(self, player_idx: int) -> bool:
-        """Player with right to calculate reveals pile."""
         self.error = None
         if self.phase != GamePhase.CALCULATING:
             self.error = "Not in calculating phase."
@@ -624,26 +549,18 @@ class GameEngine:
         if player_idx != self.calculator_idx:
             self.error = "You don't have the right to calculate."
             return False
-
-        calculator = self.players[player_idx]
-        total = calculator.pile_points
-
-        self._log("calculate", calculator.player_id, {
+        total = self.players[player_idx].pile_points
+        self._log("calculate", self.players[player_idx].player_id, {
             "total": total,
             "win": total >= 31,
-            "pile": [repr(c) for c in calculator.score_pile + calculator.hidden_pile]
         })
-
         if total >= 31:
             self._end_round(player_idx, self.current_stake, RoundEndReason.CALCULATED_WIN)
         else:
-            loser_idx = player_idx
-            winner_idx = 1 - loser_idx
-            self._end_round(winner_idx, self.current_stake, RoundEndReason.CALCULATED_LOSE)
+            self._end_round(1 - player_idx, self.current_stake, RoundEndReason.CALCULATED_LOSE)
         return True
 
     def skip_calculate(self, player_idx: int) -> bool:
-        """Pass on calculating — proceed to draw."""
         self.error = None
         if self.phase != GamePhase.CALCULATING:
             self.error = "Not in calculating phase."
@@ -651,42 +568,25 @@ class GameEngine:
         if player_idx != self.calculator_idx:
             self.error = "You don't have the right to calculate."
             return False
-
         self._log("skip_calculate", self.players[player_idx].player_id, {})
         self._draw_phase()
         return True
 
-    # ── DRAW PHASE ───────────────────────────
+    # ── DRAW ─────────────────────────────────
 
     def _draw_phase(self):
-        """Both players draw back to 3 cards. Check for deck exhaustion."""
-        # Active player draws first (convention)
         self.players[self.active_idx].draw_to_three(self.deck)
         self.players[1 - self.active_idx].draw_to_three(self.deck)
-
-        self._log("draw", "system", {
-            "deck_remaining": len(self.deck),
-            "p0_hand": len(self.players[0].hand),
-            "p1_hand": len(self.players[1].hand),
-        })
-
-        # If deck exhausted and both have cards, keep playing
+        self._log("draw", "system", {"deck_remaining": len(self.deck)})
         if len(self.deck) == 0 and (len(self.players[0].hand) == 0 or len(self.players[1].hand) == 0):
-            # Deck gone and someone has no cards — resolve by points
             self._resolve_deck_exhausted()
-            return
-
-        self.phase = GamePhase.PLAYING
+        else:
+            self.phase = GamePhase.PLAYING
 
     def _resolve_deck_exhausted(self):
-        p0_pts = self.players[0].pile_points
-        p1_pts = self.players[1].pile_points
-        if p0_pts >= p1_pts:
-            winner_idx = 0
-        else:
-            winner_idx = 1
-        self._log("deck_exhausted", "system", {"p0": p0_pts, "p1": p1_pts})
-        self._end_round(winner_idx, self.current_stake, RoundEndReason.DECK_EXHAUSTED)
+        p0, p1 = self.players[0].pile_points, self.players[1].pile_points
+        self._log("deck_exhausted", "system", {"p0": p0, "p1": p1})
+        self._end_round(0 if p0 >= p1 else 1, self.current_stake, RoundEndReason.DECK_EXHAUSTED)
 
     # ── ROUND END ────────────────────────────
 
@@ -695,61 +595,67 @@ class GameEngine:
         self.round_end_reason = reason
         self.last_round_winner_idx = winner_idx
         self.players[winner_idx].game_score += stake
-
         self._log("round_end", "system", {
             "winner": self.players[winner_idx].player_id,
             "stake": stake,
             "reason": reason.value,
             "scores": {p.player_id: p.game_score for p in self.players}
         })
-
-        # Check game over
         if self.players[winner_idx].game_score >= self.target_score:
             self.phase = GamePhase.GAME_OVER
-            self._log("game_over", "system", {
-                "winner": self.players[winner_idx].player_id,
-                "scores": {p.player_id: p.game_score for p in self.players}
-            })
         else:
             self.phase = GamePhase.ROUND_OVER
 
-    # ── VALID CUTS HELPER ─────────────────────
+    # ── HELPERS ──────────────────────────────
 
     def get_valid_cuts(self, player_idx: int) -> list[list[str]]:
-        """
-        Return all valid cut combinations from player's hand.
-        Used by UI to show which combos are legal, and by AI bots.
-        """
         player = self.players[player_idx]
         n = len(self.played_cards)
-        from itertools import combinations
         valid = []
         for combo in combinations(player.hand, n):
             combo_list = list(combo)
-            suits = {c.suit for c in combo_list}
-            if len(suits) == 1 and self._can_cut(self.played_cards, combo_list):
+            if len({c.suit for c in combo_list}) == 1 and self._can_cut(self.played_cards, combo_list):
                 valid.append([repr(c) for c in combo_list])
         return valid
+
+    def compute_tip(self, player_idx: int) -> dict:
+        """Min/max score estimate for player — what they can know about their pile."""
+        p = self.players[player_idx]
+        known = p.known_pile_points
+        hc = p.hidden_card_count
+        min_total = known + hc * POINT_VALUES[Rank.JACK]
+        max_total = known + hc * POINT_VALUES[Rank.ACE]
+        return {
+            "known_points": known,
+            "hidden_count": hc,
+            "min_total": min_total,
+            "max_total": max_total,
+            "can_possibly_win": max_total >= 31,
+            "guaranteed_win": min_total >= 31,
+        }
 
     # ── STATE SNAPSHOT ────────────────────────
 
     def get_state(self, perspective_idx: Optional[int] = None, debug: bool = False) -> dict:
-        """
-        Return a JSON-serializable game state.
-        perspective_idx: if set, hide opponent's hand (for human player views).
-        debug: reveal everything.
-        """
-        states = []
+        player_states = []
         for i, p in enumerate(self.players):
             reveal_hand = debug or (perspective_idx is None) or (i == perspective_idx)
-            states.append(p.to_dict(reveal_hand=reveal_hand, reveal_pile=True))
+            player_states.append(p.to_dict(reveal_hand=reveal_hand, debug=debug))
+
+        valid_cuts = []
+        if self.phase in (GamePhase.CUTTING, GamePhase.FORCED_CUT) and self.playing_player_idx is not None:
+            valid_cuts = self.get_valid_cuts(1 - self.playing_player_idx)
+
+        tip = None
+        if perspective_idx is not None and self.phase == GamePhase.CALCULATING:
+            if self.calculator_idx == perspective_idx:
+                tip = self.compute_tip(perspective_idx)
 
         return {
             "phase": self.phase.value,
             "round_number": self.round_number,
             "active_player_idx": self.active_idx,
             "active_player_id": self.active_player.player_id,
-            "opponent_idx": self.opponent_idx,
             "calculator_idx": self.calculator_idx,
             "calculator_id": self.players[self.calculator_idx].player_id if self.calculator_idx is not None else None,
             "playing_player_idx": self.playing_player_idx,
@@ -757,16 +663,18 @@ class GameEngine:
             "pending_stake": self.pending_stake,
             "stake_offerer_idx": self.stake_offerer_idx,
             "stake_offerer_id": self.players[self.stake_offerer_idx].player_id if self.stake_offerer_idx is not None else None,
+            "can_raise_stake": [self.can_raise_stake(i) for i in range(2)],
             "played_cards": [c.to_dict() for c in self.played_cards],
             "is_maliutka": self.is_maliutka,
             "deck": self.deck.to_dict(debug=debug),
             "trump_suit": self.trump_suit.value if self.trump_suit else None,
             "trump_card": self.deck.trump_card.to_dict() if self.deck.trump_card else None,
-            "players": states,
+            "players": player_states,
             "target_score": self.target_score,
             "round_winner_idx": self.round_winner_idx,
             "round_end_reason": self.round_end_reason.value if self.round_end_reason else None,
-            "move_history": [m.to_dict() for m in self.move_history[-20:]],  # last 20 moves
+            "move_history": [m.to_dict() for m in self.move_history[-30:]],
             "error": self.error,
-            "valid_cuts": self.get_valid_cuts(1 - self.active_idx) if self.phase in (GamePhase.CUTTING, GamePhase.FORCED_CUT) else [],
+            "valid_cuts": valid_cuts,
+            "tip": tip,
         }
