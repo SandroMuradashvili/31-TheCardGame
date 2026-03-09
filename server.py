@@ -1,371 +1,415 @@
 """
-BURA Game Server
-Flask API that drives the game engine and serves the UI.
+BURA (Thirty-One) Flask Game Server
+RESTful API for all game actions.
 """
 
 from flask import Flask, jsonify, request, send_from_directory, make_response
-import json
 import os
+import uuid
 
 from game_engine import (
-    GameState, Phase, Card, RoundResult,
-    new_round, apply_move, draw_cards, apply_round_result,
-    is_game_over, game_winner, legal_moves,
-    MovePlay, MoveCut, MovePass, MoveCalculate, MoveContinue,
-    MoveRaise, MoveDeclineRaise, MoveAcceptRaise,
-    SUIT_SYMBOLS, is_maliutka, is_three_trumps, score_pile
+    GameEngine, HumanPlayer, BotPlayer,
+    GamePhase, Suit, Rank, Card
 )
-from bot import BuraBot
 
-app = Flask(__name__)
+# ─────────────────────────────────────────────
+# SIMPLE BOT (random-ish strategy)
+# ─────────────────────────────────────────────
+
+class SimpleBot(BotPlayer):
+    """Basic bot that makes legal moves. Replace with smarter AI subclasses."""
+
+    def choose_play(self, engine: "GameEngine") -> list[str]:
+        import random
+        from itertools import combinations
+
+        hand = self.hand
+        # Group by suit
+        by_suit: dict = {}
+        for c in hand:
+            by_suit.setdefault(c.suit, []).append(c)
+
+        # Prefer playing trump if we have 3 trumps (instant win)
+        trump_cards = by_suit.get(engine.trump_suit, [])
+        if len(trump_cards) == 3:
+            return [repr(c) for c in trump_cards]
+
+        # Try to play highest-value single card from non-trump
+        best_single = max(hand, key=lambda c: c.points)
+        return [repr(best_single)]
+
+    def choose_cut_or_pass(self, engine: "GameEngine"):
+        """Returns (action, card_ids) where action is 'cut' or 'pass'."""
+        valid_cuts = engine.get_valid_cuts(engine.players.index(self))
+        if valid_cuts:
+            # Pick the cut that uses lowest-value cards
+            best = min(valid_cuts, key=lambda combo: sum(
+                next(c for c in self.hand if repr(c) == cid).points
+                for cid in combo
+            ))
+            return ("cut", best)
+
+        # Must pass — pick lowest value cards
+        import random
+        n = len(engine.played_cards)
+        sorted_hand = sorted(self.hand, key=lambda c: c.points)
+        pass_cards = sorted_hand[:n]
+        return ("pass", [repr(c) for c in pass_cards])
+
+    def choose_calculate(self, engine: "GameEngine") -> bool:
+        return self.pile_points >= 31
+
+    def choose_stake(self, engine: "GameEngine") -> int:
+        """Return 0 to decline, or new stake value to offer/accept."""
+        return 0  # Conservative bot never raises
+
+
+# ─────────────────────────────────────────────
+# SESSION STORE (in-memory; swap for Redis/DB for multiplayer)
+# ─────────────────────────────────────────────
+
+games: dict[str, GameEngine] = {}
+
+
+def get_game(game_id: str) -> GameEngine:
+    if game_id not in games:
+        raise KeyError(f"Game {game_id} not found")
+    return games[game_id]
+
+
+# ─────────────────────────────────────────────
+# FLASK APP
+# ─────────────────────────────────────────────
+
+app = Flask(__name__, static_folder=".")
 
 @app.after_request
 def add_cors(response):
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
     return response
 
-@app.route('/api/<path:path>', methods=['OPTIONS'])
+@app.route("/", defaults={"path": ""}, methods=["OPTIONS"])
+@app.route("/<path:path>", methods=["OPTIONS"])
 def options_handler(path):
-    return '', 204
-
-# Global game state (single session for now)
-game_state: GameState = None
-bot = BuraBot(player_id=1)  # Bot is always P2
-game_log: list[str] = []
-last_bot_reasoning: str = ""
-round_results: list[dict] = []
-first_player = 0
+    return make_response("", 204)
 
 
-def card_to_dict(c: Card) -> dict:
-    return {
-        "rank": c.rank,
-        "suit": c.suit,
-        "symbol": SUIT_SYMBOLS[c.suit],
-        "points": c.points,
-        "id": f"{c.rank}_{c.suit}"
-    }
+def error_response(msg: str, code: int = 400):
+    return jsonify({"success": False, "error": msg}), code
 
 
-def state_to_dict(state: GameState, reveal_bot_hand: bool = False) -> dict:
-    """Convert game state to JSON-serializable dict."""
-    # Bot hand is hidden unless debugging
-    bot_hand = state.hands[1]
-    human_hand = state.hands[0]
-
-    return {
-        "phase": state.phase.name,
-        "trump_suit": state.trump_suit,
-        "trump_symbol": SUIT_SYMBOLS[state.trump_suit],
-        "human_hand": [card_to_dict(c) for c in human_hand],
-        "bot_hand_count": len(bot_hand),
-        "bot_hand": [card_to_dict(c) for c in bot_hand] if reveal_bot_hand else [],
-        "human_score_pile": score_pile(state.score_piles[0]),
-        "bot_score_pile": score_pile(state.score_piles[1]),
-        "human_pile_cards": [card_to_dict(c) for c in state.score_piles[0]],
-        "bot_pile_cards": [card_to_dict(c) for c in state.score_piles[1]],
-        "game_scores": state.game_scores,
-        "game_length": state.game_length,
-        "current_stake": state.current_stake,
-        "active_player": state.active_player,
-        "played_cards": [card_to_dict(c) for c in state.played_cards],
-        "deck_remaining": len(state.deck),
-        "last_taker": state.last_taker,
-        "calculate_available": state.calculate_available,
-        "round_number": state.round_number,
-        "stake_last_raised_by": state.stake_last_raised_by,
-        "human_is_active": state.active_player == 0,
-        "game_over": is_game_over(state.game_scores, state.game_length),
-        "winner": game_winner(state.game_scores) if is_game_over(state.game_scores, state.game_length) else None,
-    }
+def ok_response(data: dict):
+    return jsonify({"success": True, **data})
 
 
-def log(msg: str):
-    game_log.append(msg)
-    print(msg)
+# ── Game management ──────────────────────────
 
-
-def run_bot_turn(state: GameState) -> GameState:
-    """Run bot's turn(s) until it's human's turn or round ends."""
-    global last_bot_reasoning, game_state
-
-    max_iterations = 20
-    i = 0
-
-    while i < max_iterations:
-        i += 1
-        s = state
-
-        # Is it the game over?
-        if is_game_over(s.game_scores, s.game_length):
-            return s
-
-        # Is it human's turn?
-        if s.phase == Phase.ROUND_OVER:
-            return s
-
-        if s.phase == Phase.DRAW:
-            state = draw_cards(s)
-            log("Cards drawn")
-            continue
-
-        # Check if bot needs to act
-        bot_should_act = False
-
-        if s.phase == Phase.STAKE_OFFER:
-            # Either player can act — if human hasn't raised yet and it's not human's raise to respond to
-            if s.stake_last_raised_by == 0:
-                # Human raised — bot must respond
-                bot_should_act = True
-            elif s.active_player == 1:
-                # Bot's turn to play, they can optionally raise first
-                bot_should_act = True
-            else:
-                # Human's turn — stop
-                return state
-
-        elif s.phase == Phase.PLAY:
-            if s.active_player == 1:
-                bot_should_act = True
-            else:
-                return state
-
-        elif s.phase == Phase.CUT_OR_PASS:
-            if s.active_player == 0:
-                # Human played, bot must respond
-                bot_should_act = True
-            else:
-                return state
-
-        elif s.phase == Phase.CALCULATE:
-            if s.last_taker == 1:
-                bot_should_act = True
-            else:
-                return state
-
-        if not bot_should_act:
-            return state
-
-        # Bot acts
-        move, reasoning = bot.choose_move(s)
-        last_bot_reasoning = reasoning.explanation
-
-        move_name = type(move).__name__
-        log(f"Bot: {move_name} — {reasoning.explanation}")
-
-        new_state, result = apply_move(s, 1, move)
-
-        if result:
-            new_state = handle_round_result(new_state, result)
-
-        state = new_state
-
-        # After bot plays in STAKE_OFFER, transition to PLAY for human
-        if isinstance(move, MoveContinue) and s.phase == Phase.STAKE_OFFER and s.active_player == 1:
-            # Bot decided not to raise — now it's bot's PLAY turn if active, or human's
-            continue
-
-    return state
-
-
-def handle_round_result(state: GameState, result: RoundResult) -> GameState:
-    """Apply round result to game scores and start new round."""
-    global round_results, bot, first_player
-
-    winner_name = "You" if result.winner == 0 else "Bot"
-    round_results.append({
-        "winner": result.winner,
-        "winner_name": winner_name,
-        "stake": result.stake,
-        "reason": result.reason,
-        "score": result.calculator_score,
-        "new_scores": None  # filled below
-    })
-
-    new_scores = apply_round_result(state.game_scores, result)
-
-    log(f"Round over — {winner_name} wins {result.stake} point(s)! Reason: {result.reason}")
-    log(f"Game scores: P1={new_scores[0]}, P2={new_scores[1]}")
-
-    if is_game_over(new_scores, state.game_length):
-        state.game_scores = new_scores
-        state.phase = Phase.GAME_OVER
-        round_results[-1]["new_scores"] = new_scores
-        return state
-
-    # New round
-    first_player = result.winner  # winner goes first
-    new_state = new_round(
-        game_scores=new_scores,
-        game_length=state.game_length,
-        first_player=first_player,
-        round_number=state.round_number + 1
-    )
-    round_results[-1]["new_scores"] = new_scores
-
-    # Reset bot tracker
-    bot.reset_for_new_round(
-        hand=new_state.hands[1],
-        trump_suit=new_state.trump_suit,
-        deck_size=len(new_state.deck)
-    )
-
-    return new_state
-
-
-# ─────────────────────────────────────────────
-#  API Routes
-# ─────────────────────────────────────────────
-
-@app.route('/')
-def index():
-    return send_from_directory('.', 'index.html')
-
-
-@app.route('/api/new_game', methods=['POST'])
+@app.route("/api/new_game", methods=["POST"])
 def new_game():
-    global game_state, bot, game_log, round_results, first_player
-    data = request.json or {}
-    game_length = data.get('game_length', 7)
-    first_player = 0  # random.randint(0, 1)
+    """Create a new game. Supports human vs bot or human vs human."""
+    body = request.get_json(silent=True) or {}
+    mode = body.get("mode", "hvb")          # hvb = human vs bot, hvh = human vs human
+    target = int(body.get("target_score", 7))
+    player_name = body.get("player_name", "Player")
 
-    game_log = []
-    round_results = []
-    bot = BuraBot(player_id=1)
+    p1 = HumanPlayer("p1", player_name)
 
-    game_state = new_round(
-        game_scores=[0, 0],
-        game_length=game_length,
-        first_player=first_player,
-        round_number=1
-    )
+    if mode == "hvb":
+        p2 = SimpleBot("p2", "Bot")
+    else:
+        p2 = HumanPlayer("p2", body.get("player2_name", "Player 2"))
 
-    bot.reset_for_new_round(
-        hand=game_state.hands[1],
-        trump_suit=game_state.trump_suit,
-        deck_size=len(game_state.deck)
-    )
+    engine = GameEngine(p1, p2, target_score=target)
+    game_id = str(uuid.uuid4())[:8]
+    games[game_id] = engine
 
-    log(f"New game started! Game to {game_length}. Trump: {game_state.trump_suit}")
-
-    # If bot goes first, run bot's turn
-    if first_player == 1:
-        game_state = run_bot_turn(game_state)
-
-    return jsonify({
-        "state": state_to_dict(game_state),
-        "log": game_log[-10:],
-        "bot_reasoning": last_bot_reasoning,
-        "round_results": round_results
-    })
+    return ok_response({"game_id": game_id, "mode": mode})
 
 
-@app.route('/api/state', methods=['GET'])
-def get_state():
-    if game_state is None:
-        return jsonify({"error": "No game in progress"}), 400
-    return jsonify({
-        "state": state_to_dict(game_state),
-        "log": game_log[-10:],
-        "bot_reasoning": last_bot_reasoning,
-        "round_results": round_results
-    })
-
-
-@app.route('/api/move', methods=['POST'])
-def make_move():
-    global game_state, last_bot_reasoning
-
-    if game_state is None:
-        return jsonify({"error": "No game in progress"}), 400
-
-    data = request.json
-    move_type = data.get('type')
-
-    # Parse move
-    move = None
+@app.route("/api/game/<game_id>/state", methods=["GET"])
+def game_state(game_id: str):
     try:
-        if move_type == 'play':
-            card_ids = data.get('cards', [])
-            cards = []
-            for cid in card_ids:
-                rank, suit = cid.split('_')
-                cards.append(Card(rank, suit))
-            move = MovePlay(cards)
-            log(f"Human plays: {cards}")
+        engine = get_game(game_id)
+    except KeyError:
+        return error_response("Game not found", 404)
 
-        elif move_type == 'cut':
-            card_ids = data.get('cards', [])
-            cards = []
-            for cid in card_ids:
-                rank, suit = cid.split('_')
-                cards.append(Card(rank, suit))
-            move = MoveCut(cards)
-            log(f"Human cuts: {cards}")
+    debug = request.args.get("debug", "false").lower() == "true"
+    perspective = request.args.get("perspective")
+    perspective_idx = int(perspective) if perspective is not None else None
 
-        elif move_type == 'pass':
-            card_ids = data.get('cards', [])
-            cards = []
-            for cid in card_ids:
-                rank, suit = cid.split('_')
-                cards.append(Card(rank, suit))
-            move = MovePass(cards)
-            log(f"Human passes: {[str(c) for c in cards]}")
+    state = engine.get_state(perspective_idx=perspective_idx, debug=debug)
+    return ok_response({"state": state})
 
-        elif move_type == 'calculate':
-            move = MoveCalculate()
-            log("Human calculates!")
 
-        elif move_type == 'continue':
-            move = MoveContinue()
-            log("Human continues")
+# ── Round lifecycle ──────────────────────────
 
-        elif move_type == 'raise':
-            new_stake = data.get('new_stake')
-            move = MoveRaise(new_stake)
-            log(f"Human raises to {new_stake}")
+@app.route("/api/game/<game_id>/start_round", methods=["POST"])
+def start_round(game_id: str):
+    try:
+        engine = get_game(game_id)
+    except KeyError:
+        return error_response("Game not found", 404)
 
-        elif move_type == 'decline_raise':
-            move = MoveDeclineRaise()
-            log("Human declines raise")
+    if engine.phase not in (GamePhase.WAITING, GamePhase.ROUND_OVER):
+        return error_response(f"Cannot start round from phase: {engine.phase.value}")
 
-        elif move_type == 'accept_raise':
-            move = MoveAcceptRaise()
-            log("Human accepts raise")
+    engine.start_round()
+
+    # If bot goes first in stakes, let it act
+    _bot_act_if_needed(engine)
+
+    state = engine.get_state(perspective_idx=0)
+    return ok_response({"state": state})
+
+
+# ── Stakes ───────────────────────────────────
+
+@app.route("/api/game/<game_id>/offer_stake", methods=["POST"])
+def offer_stake(game_id: str):
+    try:
+        engine = get_game(game_id)
+    except KeyError:
+        return error_response("Game not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    player_idx = int(body.get("player_idx", 0))
+    new_stake = int(body.get("stake", 2))
+
+    if not engine.offer_stake(player_idx, new_stake):
+        return error_response(engine.error)
+
+    _bot_act_if_needed(engine)
+
+    return ok_response({"state": engine.get_state(perspective_idx=0)})
+
+
+@app.route("/api/game/<game_id>/accept_stake", methods=["POST"])
+def accept_stake(game_id: str):
+    try:
+        engine = get_game(game_id)
+    except KeyError:
+        return error_response("Game not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    player_idx = int(body.get("player_idx", 0))
+
+    if not engine.accept_stake(player_idx):
+        return error_response(engine.error)
+
+    _bot_act_if_needed(engine)
+
+    return ok_response({"state": engine.get_state(perspective_idx=0)})
+
+
+@app.route("/api/game/<game_id>/decline_stake", methods=["POST"])
+def decline_stake(game_id: str):
+    try:
+        engine = get_game(game_id)
+    except KeyError:
+        return error_response("Game not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    player_idx = int(body.get("player_idx", 0))
+
+    if not engine.decline_stake(player_idx):
+        return error_response(engine.error)
+
+    return ok_response({"state": engine.get_state(perspective_idx=0)})
+
+
+@app.route("/api/game/<game_id>/start_play", methods=["POST"])
+def start_play(game_id: str):
+    try:
+        engine = get_game(game_id)
+    except KeyError:
+        return error_response("Game not found", 404)
+
+    if not engine.start_play():
+        return error_response(engine.error)
+
+    _bot_act_if_needed(engine)
+
+    return ok_response({"state": engine.get_state(perspective_idx=0)})
+
+
+# ── Playing ──────────────────────────────────
+
+@app.route("/api/game/<game_id>/play", methods=["POST"])
+def play_cards(game_id: str):
+    try:
+        engine = get_game(game_id)
+    except KeyError:
+        return error_response("Game not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    player_idx = int(body.get("player_idx", 0))
+    card_ids = body.get("cards", [])
+
+    if not engine.play_cards(player_idx, card_ids):
+        return error_response(engine.error)
+
+    # Let bot respond
+    _bot_act_if_needed(engine)
+
+    return ok_response({"state": engine.get_state(perspective_idx=0)})
+
+
+@app.route("/api/game/<game_id>/cut", methods=["POST"])
+def cut_cards(game_id: str):
+    try:
+        engine = get_game(game_id)
+    except KeyError:
+        return error_response("Game not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    player_idx = int(body.get("player_idx", 0))
+    card_ids = body.get("cards", [])
+
+    if not engine.cut_cards(player_idx, card_ids):
+        return error_response(engine.error)
+
+    _bot_act_if_needed(engine)
+
+    return ok_response({"state": engine.get_state(perspective_idx=0)})
+
+
+@app.route("/api/game/<game_id>/pass", methods=["POST"])
+def pass_cards(game_id: str):
+    try:
+        engine = get_game(game_id)
+    except KeyError:
+        return error_response("Game not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    player_idx = int(body.get("player_idx", 0))
+    card_ids = body.get("cards", [])
+
+    if not engine.pass_cards(player_idx, card_ids):
+        return error_response(engine.error)
+
+    _bot_act_if_needed(engine)
+
+    return ok_response({"state": engine.get_state(perspective_idx=0)})
+
+
+# ── Calculating ──────────────────────────────
+
+@app.route("/api/game/<game_id>/calculate", methods=["POST"])
+def calculate(game_id: str):
+    try:
+        engine = get_game(game_id)
+    except KeyError:
+        return error_response("Game not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    player_idx = int(body.get("player_idx", 0))
+
+    if not engine.calculate(player_idx):
+        return error_response(engine.error)
+
+    return ok_response({"state": engine.get_state(perspective_idx=0)})
+
+
+@app.route("/api/game/<game_id>/skip_calculate", methods=["POST"])
+def skip_calculate(game_id: str):
+    try:
+        engine = get_game(game_id)
+    except KeyError:
+        return error_response("Game not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    player_idx = int(body.get("player_idx", 0))
+
+    if not engine.skip_calculate(player_idx):
+        return error_response(engine.error)
+
+    _bot_act_if_needed(engine)
+
+    return ok_response({"state": engine.get_state(perspective_idx=0)})
+
+
+# ── Serve frontend ───────────────────────────
+
+@app.route("/")
+def index():
+    return send_from_directory(".", "index.html")
+
+
+# ─────────────────────────────────────────────
+# BOT AUTO-PLAY LOGIC
+# ─────────────────────────────────────────────
+
+def _bot_act_if_needed(engine: GameEngine, max_iterations: int = 20):
+    """
+    After each human action, keep letting the bot act until it's the human's turn
+    or the game is waiting for human input.
+    """
+    for _ in range(max_iterations):
+        phase = engine.phase
+
+        if phase in (GamePhase.GAME_OVER, GamePhase.ROUND_OVER, GamePhase.WAITING):
+            break
+
+        bot_idx = next((i for i, p in enumerate(engine.players) if not p.is_human()), None)
+        if bot_idx is None:
+            break  # HvH, no bot
+
+        bot = engine.players[bot_idx]
+
+        # STAKES phase — bot may want to raise (or respond to human offer)
+        if phase == GamePhase.STAKES:
+            if engine.stake_offerer_idx is not None and engine.stake_offerer_idx != bot_idx:
+                # Human offered stake — bot responds
+                # Simple bot: accept if pending is ≤ 3, else decline
+                if engine.pending_stake <= 3:
+                    engine.accept_stake(bot_idx)
+                else:
+                    engine.decline_stake(bot_idx)
+            elif engine.stake_offerer_idx is None:
+                # No pending offer — always break so human gets a chance to raise stakes.
+                # The human calls start_play() explicitly when ready.
+                break
+            else:
+                # Bot already offered, waiting for human
+                break
+
+        # PLAYING phase — bot's turn
+        elif phase == GamePhase.PLAYING:
+            if engine.active_idx != bot_idx:
+                break  # Human's turn
+            play_ids = bot.choose_play(engine)
+            engine.play_cards(bot_idx, play_ids)
+
+        # CUTTING / FORCED_CUT — bot is the opponent
+        elif phase in (GamePhase.CUTTING, GamePhase.FORCED_CUT):
+            if engine.playing_player_idx == bot_idx:
+                break  # Bot played, waiting for human to cut/pass
+            action, card_ids = bot.choose_cut_or_pass(engine)
+            if action == "cut":
+                engine.cut_cards(bot_idx, card_ids)
+            else:
+                engine.pass_cards(bot_idx, card_ids)
+
+        # CALCULATING — bot decides whether to calculate
+        elif phase == GamePhase.CALCULATING:
+            if engine.calculator_idx != bot_idx:
+                break  # Human has right to calculate
+            if bot.choose_calculate(engine):
+                engine.calculate(bot_idx)
+            else:
+                engine.skip_calculate(bot_idx)
 
         else:
-            return jsonify({"error": f"Unknown move type: {move_type}"}), 400
-
-    except Exception as e:
-        return jsonify({"error": f"Move parse error: {str(e)}"}), 400
-
-    # Apply human move
-    new_state, result = apply_move(game_state, 0, move)
-
-    if result:
-        new_state = handle_round_result(new_state, result)
-
-    game_state = new_state
-
-    # Run bot's response
-    if not is_game_over(game_state.game_scores, game_state.game_length):
-        if game_state.phase != Phase.GAME_OVER:
-            game_state = run_bot_turn(game_state)
-
-    return jsonify({
-        "state": state_to_dict(game_state),
-        "log": game_log[-15:],
-        "bot_reasoning": last_bot_reasoning,
-        "round_results": round_results[-3:]
-    })
+            break
 
 
-@app.route('/api/log', methods=['GET'])
-def get_log():
-    return jsonify({"log": game_log, "round_results": round_results})
+# ─────────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────────
 
-
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    print(f"BURA server running at http://localhost:{port}")
+    app.run(debug=True, port=port)
