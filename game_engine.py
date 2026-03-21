@@ -445,11 +445,14 @@ class GameEngine:
     # ── Stakes ────────────────────────────────────────────────────────────────
 
     def can_raise_stake(self, player_idx: int) -> bool:
-        if self.phase != GamePhase.STAKES:
+        # Can raise at any point during the round EXCEPT:
+        # - round is over / not started
+        # - stake already at max (6)
+        # - you already raised and opponent hasn't responded yet
+        if self.phase in (GamePhase.WAITING, GamePhase.ROUND_OVER, GamePhase.GAME_OVER):
             return False
         if self.current_stake >= 6:
             return False
-        # Can't raise if you already raised and are waiting for a response
         if self.stake_offerer_idx is not None and self.stake_offerer_idx == player_idx:
             return False
         base = self.pending_stake if self.stake_offerer_idx is not None else self.current_stake
@@ -461,7 +464,7 @@ class GameEngine:
             self.error = "You cannot raise the stake right now."
             return False
         base = self.pending_stake if self.stake_offerer_idx is not None else self.current_stake
-        self.pending_stake    = base + 1
+        self.pending_stake     = base + 1
         self.stake_offerer_idx = player_idx
         self._log("stake_offer", self.players[player_idx].player_id, {"stake": self.pending_stake})
         return True
@@ -557,6 +560,62 @@ class GameEngine:
 
     # ── Cutting ───────────────────────────────────────────────────────────────
 
+    def counter_play(self, player_idx: int, card_ids: list[str]) -> bool:
+        """
+        During CUTTING phase, instead of cutting or passing, the cutter can
+        play 3 same-suit non-trump cards as a counter-attack (counter maliutka).
+
+        The original played cards are returned to the original player's pile
+        (they take them back as known cards). The counter cards go on the table
+        and now the ORIGINAL player must cut or pass those 3 cards.
+
+        This is only valid when:
+        - Phase is CUTTING (not FORCED_CUT — can't counter a maliutka)
+        - Exactly 3 cards, same non-trump suit
+        - Player is the cutter (not the one who played)
+        """
+        self.error = None
+        if self.phase != GamePhase.CUTTING:
+            self.error = "Can only counter-play during normal cutting phase."
+            return False
+        if player_idx == self.playing_player_idx:
+            self.error = "Cannot counter your own cards."
+            return False
+
+        cutter  = self.players[player_idx]
+        counter = self._cards_from_ids(cutter, card_ids)
+        if not counter:
+            self.error = "Invalid card selection."
+            return False
+
+        err = self._validate_play(counter)
+        if err:
+            self.error = err
+            return False
+
+        if len(counter) != 3:
+            self.error = "Counter-play must be exactly 3 cards."
+            return False
+
+        if not self._is_maliutka(counter):
+            self.error = "Counter-play must be 3 non-trump cards of the same suit."
+            return False
+
+        # Original player takes their played cards back (known)
+        original_player = self.players[self.playing_player_idx]
+        original_player.add_to_pile(self.played_cards, hidden=False)
+
+        # Counter cards go on the table — original player must now cut or pass
+        cutter.remove_from_hand(counter)
+        self.played_cards       = counter
+        self.playing_player_idx = player_idx
+        self.is_maliutka        = True   # forced cut — 3 non-trump same suit
+        self._log("counter_play", cutter.player_id, {
+            "cards": [repr(c) for c in counter],
+        })
+        self.phase = GamePhase.FORCED_CUT
+        return True
+
     def cut_cards(self, player_idx: int, card_ids: list[str]) -> bool:
         self.error = None
         if self.phase not in (GamePhase.CUTTING, GamePhase.FORCED_CUT):
@@ -600,9 +659,16 @@ class GameEngine:
         if not pass_list:
             self.error = "Invalid card selection."
             return False
-        if len(pass_list) != len(self.played_cards):
-            self.error = f"Must pass exactly {len(self.played_cards)} card(s)."
-            return False
+        # In forced_cut (maliutka), if the passer has fewer cards than required
+        # (deck ran low, they couldn't draw to full hand), accept a partial pass
+        # rather than getting stuck. The passer gives everything they have.
+        required = len(self.played_cards)
+        if len(pass_list) != required:
+            if self.phase == GamePhase.FORCED_CUT and len(pass_list) == len(passer.hand):
+                pass  # Accept partial pass — passer is out of cards
+            else:
+                self.error = f"Must pass exactly {required} card(s)."
+                return False
 
         passer.remove_from_hand(pass_list)
         playing_player = self.players[self.playing_player_idx]

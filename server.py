@@ -300,6 +300,14 @@ def bot_respond(room_id: str):
     return ok(state=engine.get_state(perspective_idx=pidx))
 
 
+@app.route("/api/room/<room_id>/counter_play", methods=["POST"])
+def counter_play(room_id: str):
+    body  = request.get_json(silent=True) or {}
+    pidx  = int(body.get("player_idx", 0))
+    cards = body.get("cards", [])
+    return _action(room_id, pidx, lambda: rooms[room_id.upper()].engine.counter_play(pidx, cards))
+
+
 @app.route("/api/room/<room_id>/cut", methods=["POST"])
 def cut_cards(room_id: str):
     body  = request.get_json(silent=True) or {}
@@ -345,7 +353,6 @@ def set_bot_speed(room_id: str):
     return ok(bot_instant=instant)
 
 
-
 @app.route("/api/room/<room_id>/dev/deal_specific", methods=["POST"])
 def dev_deal_specific(room_id: str):
     """
@@ -383,6 +390,7 @@ def dev_deal_specific(room_id: str):
 
     state = engine.get_state(perspective_idx=pidx, debug=True)
     return ok(state=state)
+
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 

@@ -61,9 +61,15 @@ class SimpleBot(BotPlayer):
             best = min(valid, key=combo_value)
             return ("cut", best)
 
-        # Cannot cut — pass the n cheapest cards
+        # Cannot cut — pass the n cheapest cards.
+        # If the bot has fewer cards than needed (can happen when deck ran low),
+        # pass however many we have — engine will error, but at least we don't loop.
         n        = len(engine.played_cards)
         cheapest = sorted(self.hand, key=lambda c: c.points)[:n]
+        if len(cheapest) < n:
+            # Not enough cards to pass — should not happen in a normal game,
+            # but pass what we have to avoid infinite loop in bot_runner
+            cheapest = sorted(self.hand, key=lambda c: c.points)
         return ("pass", [repr(c) for c in cheapest])
 
     def choose_calculate(self, engine: GameEngine) -> bool:
