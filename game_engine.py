@@ -728,18 +728,20 @@ class GameEngine:
         self.players[1 - self.active_idx].draw_to_three(self.deck)
         self._log("draw", "system", {"deck_remaining": len(self.deck)})
 
-        if len(self.deck) == 0:
-            if len(self.players[0].hand) == 0 or len(self.players[1].hand) == 0:
-                # Someone truly has no cards left — end by points
-                self._resolve_deck_exhausted()
-            else:
-                # Deck empty but both players still hold cards — no more draws possible.
-                # Force the player who just took cards to calculate immediately;
-                # they cannot choose to keep playing since the deck can never refill.
-                self.phase = GamePhase.CALCULATING
-                # calculator_idx was already set by cut_cards or pass_cards
-        else:
+        h0 = len(self.players[0].hand)
+        h1 = len(self.players[1].hand)
+
+        if h0 == 0 or h1 == 0:
+            # Someone has no cards — round ends by points
+            self._resolve_deck_exhausted()
+        elif h0 == 3 and h1 == 3:
+            # Both have full hands — deck may or may not be empty, play continues
             self.phase = GamePhase.PLAYING
+        else:
+            # Deck ran out and at least one player has fewer than 3 cards.
+            # No further play is possible fairly — force calculate.
+            # calculator_idx was already set by cut_cards or pass_cards.
+            self.phase = GamePhase.CALCULATING
 
     def _resolve_deck_exhausted(self):
         p0 = self.players[0].pile_points

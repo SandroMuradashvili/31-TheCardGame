@@ -122,11 +122,15 @@ window.renderZone = function(idx, s) {
 };
 
 window.renderHandCards = function(container, hand, canSelect, playerIdx, s, revealCards) {
-  const newKey = JSON.stringify(hand.map(c => c.id || 'h'));
+  // For hidden cards (opponent), use positional keys like 'h0','h1','h2'
+  // so we can detect when a new card is added (count change), not just identity change.
+  const makeKey = (cards) => JSON.stringify(
+    cards.map((c, i) => c.id || `h${i}`)
+  );
+  const newKey = makeKey(hand);
   const oldKey = State.prevHandKeys[playerIdx] || '[]';
 
   if (newKey === oldKey && !State.debugMode) {
-    // Nothing structurally changed — just refresh selection highlights
     container.querySelectorAll('.card[data-id]').forEach(el =>
       el.classList.toggle('selected', State.selectedCards.includes(el.dataset.id))
     );
@@ -156,8 +160,8 @@ window.renderHandCards = function(container, hand, canSelect, playerIdx, s, reve
     const el = wrapper.firstElementChild;
     container.appendChild(el);
 
-    // Only animate cards that weren't in the previous hand
-    const cardKey = card.id || 'h';
+    // Use positional key for hidden cards so new cards are always detected
+    const cardKey = card.id || `h${i}`;
     if (wasEmpty || !oldIds.includes(cardKey)) newEls.push({ el, i });
 
     if (card.id && canSelect && revealCards)

@@ -65,8 +65,8 @@ window.doPlayCards = async function() {
   // Snapshot current keys so remaining hand cards don't re-animate from deck
   const s0 = State.gameState;
   if (s0) {
-    State.prevHandKeys[0] = JSON.stringify((s0.players[0].hand || []).map(c => c.id || 'h'));
-    State.prevHandKeys[1] = JSON.stringify((s0.players[1].hand || []).map(c => c.id || 'h'));
+    State.prevHandKeys[0] = JSON.stringify((s0.players[0].hand || []).map((c,i) => c.id || `h${i}`));
+    State.prevHandKeys[1] = JSON.stringify((s0.players[1].hand || []).map((c,i) => c.id || `h${i}`));
   }
   State.prevPlayedKey = '';
   State.gameState = step1.state;
@@ -83,8 +83,12 @@ async function _handleBotResponse() {
 
   const botState = data.state;
   const botIdx   = 1 - State.myPlayerIdx;
+  // Find the bot's first significant action (cut or pass) — not calculate/draw/skip
+  // which happen after and would mask the cut/pass we need to animate
+  const myId = State.gameState?.players[State.myPlayerIdx]?.id;
+  const botId = State.gameState?.players[1 - State.myPlayerIdx]?.id;
   const lastBotMove = [...(botState.move_history || [])].reverse().find(m =>
-    m.player !== 'system' && m.player !== State.gameState?.players[State.myPlayerIdx]?.id
+    m.player === botId && (m.type === 'cut' || m.type === 'pass' || m.type === 'counter_play')
   );
   const botAction = lastBotMove?.type;
 
@@ -92,12 +96,22 @@ async function _handleBotResponse() {
     const playedEls  = Array.from(document.querySelectorAll('#played-row .table-card'));
     const row        = document.getElementById('played-row');
     const cutCardIds = lastBotMove.data?.cut_cards || [];
-    const botHand    = State.gameState.players[botIdx]?.hand || [];
+
+    // Remove cut cards from bot's hand DOM immediately (same as human cut)
+    _removeCardsFromHandDOM(botIdx, cutCardIds);
+
+    // Snapshot bot hand keys after removal so only drawn cards animate later
+    _snapshotHandAfterAction(botIdx, cutCardIds);
+
     const cutEls = cutCardIds.map(cid => {
-      const cardData = botHand.find(c => c.id === cid);
+      const rankMap = { A:'A', T:'T', K:'K', Q:'Q', J:'J' };
+      const suitMap = { H:'hearts', D:'diamonds', C:'clubs', S:'spades' };
+      const rank = rankMap[cid[0]];
+      const suit = suitMap[cid[cid.length - 1]];
+      const cardData = rank && suit ? { id: cid, rank, suit } : null;
+      const isTrump  = cardData && botState.trump_suit && cardData.suit === botState.trump_suit;
       const wrapper  = document.createElement('div');
-      wrapper.innerHTML = buildCard(cardData || {hidden:true}, false, false, false,
-        botState.trump_suit && cardData?.suit === botState.trump_suit);
+      wrapper.innerHTML = buildCard(cardData || {hidden:true}, false, false, false, isTrump);
       const el = wrapper.firstElementChild;
       el.classList.add('no-hover', 'cut-card-anim');
       row.appendChild(el);
@@ -110,6 +124,15 @@ async function _handleBotResponse() {
   } else if (botAction === 'pass') {
     const playedEls = Array.from(document.querySelectorAll('#played-row .table-card'));
     const passCount = lastBotMove.data?.passed_count || State.gameState.played_cards?.length || 1;
+
+    // Remove passed cards from bot's hand DOM immediately (same as human pass)
+    // We don't know which cards the bot passed (they're hidden) so just remove
+    // the first N face-down card elements from the bot's hand
+    _removeNCardsFromHandDOM(botIdx, passCount);
+
+    // Snapshot bot hand keys so only drawn cards animate after the sweep
+    _snapshotHandAfterRemoval(botIdx, passCount);
+
     logAction(`<span class="le-type">PASS</span> ${botState.players[botIdx].name} passed`);
     _clearTableKey();
     animatePassSequence(passCount, botIdx, State.myPlayerIdx, playedEls, () => _forceRender(botState));
@@ -254,8 +277,8 @@ window.doSkipCalc = async function() {
   // can diff old vs new — only the drawn card(s) will animate from deck.
   const s = State.gameState;
   if (s) {
-    State.prevHandKeys[0] = JSON.stringify((s.players[0].hand || []).map(c => c.id || 'h'));
-    State.prevHandKeys[1] = JSON.stringify((s.players[1].hand || []).map(c => c.id || 'h'));
+    State.prevHandKeys[0] = JSON.stringify((s.players[0].hand || []).map((c,i) => c.id || `h${i}`));
+    State.prevHandKeys[1] = JSON.stringify((s.players[1].hand || []).map((c,i) => c.id || `h${i}`));
   }
   State.prevPlayedKey = '';
   const data = await api(ROOM('skip_calculate'), { player_idx: State.myPlayerIdx });
@@ -275,6 +298,38 @@ function _clearTableKey() {
   State.prevPlayedKey = '';
 }
 
+/** Remove N face-down cards from the bot's hand DOM (pass — we don't know which ones). */
+function _removeNCardsFromHandDOM(playerIdx, n) {
+  const container = document.getElementById(`hand-${playerIdx}`);
+  if (!container) return;
+  const cards = Array.from(container.querySelectorAll('.card'));
+  cards.slice(0, n).forEach(el => el.remove());
+  // Update prevHandKeys to reflect n fewer cards
+  const remaining = Math.max(0, cards.length - n);
+  // Use hidden placeholders since we don't know bot's card IDs
+  State.prevHandKeys[playerIdx] = JSON.stringify(Array.from({length: remaining}, (_,i) => `h${i}`));
+}
+
+/** Snapshot hand keys after cut cards are removed, so only drawn cards animate. */
+function _snapshotHandAfterAction(playerIdx, removedIds) {
+  const s = State.gameState;
+  if (!s) return;
+  const remaining = (s.players[playerIdx].hand || [])
+    .filter(c => !removedIds.includes(c.id));
+  State.prevHandKeys[playerIdx] = JSON.stringify(remaining.map((c,i) => c.id || `h${i}`));
+}
+
+/** Snapshot hand keys after N cards removed (bot pass — IDs unknown). */
+function _snapshotHandAfterRemoval(playerIdx, n) {
+  const s = State.gameState;
+  if (!s) return;
+  const hand = s.players[playerIdx].hand || [];
+  // Keep remaining cards (skip first n since those were passed)
+  const remaining = hand.slice(n);
+  State.prevHandKeys[playerIdx] = JSON.stringify(remaining.map((c,i) => c.id || `h${i}`));
+}
+
+
 /** Instantly remove specific cards from the player's hand DOM.
  *  Called before animations so the cards disappear immediately on action,
  *  rather than sitting in the hand while the animation plays.
@@ -293,9 +348,8 @@ function _removeCardsFromHandDOM(playerIdx, cardIds) {
   const s = State.gameState;
   if (s) {
     const remaining = (s.players[playerIdx].hand || [])
-      .filter(c => !cardIds.includes(c.id))
-      .map(c => c.id || 'h');
-    State.prevHandKeys[playerIdx] = JSON.stringify(remaining);
+      .filter(c => !cardIds.includes(c.id));
+    State.prevHandKeys[playerIdx] = JSON.stringify(remaining.map((c,i) => c.id || `h${i}`));
   }
 }
 

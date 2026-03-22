@@ -73,9 +73,10 @@ class SimpleBot(BotPlayer):
         return ("pass", [repr(c) for c in cheapest])
 
     def choose_calculate(self, engine: GameEngine) -> bool:
-        # If the deck is empty, we MUST calculate — no choice to keep playing
+        # Must calculate if deck is empty AND someone has fewer than 3 cards
         if len(engine.deck) == 0:
-            return True
+            if any(len(p.hand) < 3 for p in engine.players):
+                return True
 
         # Use only known_pile_points — the bot cannot see the value of cards
         # passed by the opponent (hidden_pile), just like a human player.

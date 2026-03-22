@@ -159,12 +159,15 @@ window.renderActions = function(s) {
   if (s.phase === 'calculating' && iAmCalc) {
     const known       = me.known_pile_points;
     const hc          = me.hidden_card_count;
-    const deckEmpty   = s.deck.size === 0;
+    // Must calculate if deck is empty AND someone has fewer than 3 cards
+    // (if both have 3, play can still continue even with empty deck)
+    const mustCalc = s.deck.size === 0
+      && (s.players[0].hand_count < 3 || s.players[1].hand_count < 3);
     msgEl.innerHTML = `You may calculate! Known: <span class="hl">${known} pts</span> + ${hc} hidden (${me.hidden_min_points}–${me.hidden_max_points}). <em style="color:var(--text-dim);font-size:.85em;">💡 for estimate.</em>`
-      + (deckEmpty ? `<span class="warn" style="display:block;margin-top:4px;font-size:.85em;">⚠ Deck empty — you must calculate now.</span>` : '');
+      + (mustCalc ? `<span class="warn" style="display:block;margin-top:4px;font-size:.85em;">⚠ Deck empty — you must calculate now.</span>` : '');
     btnsEl.innerHTML = `
       <button class="btn btn-gold" onclick="doCalculate()">Calculate</button>
-      ${!deckEmpty ? `<button class="btn btn-ghost" onclick="doSkipCalc()">Keep playing →</button>` : ''}
+      ${!mustCalc ? `<button class="btn btn-ghost" onclick="doSkipCalc()">Keep playing →</button>` : ''}
     `;
     return;
   }
