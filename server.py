@@ -3,13 +3,14 @@ server.py — Flask HTTP API + static file serving
 ──────────────────────────────────────────────────
 Entry point. Contains only:
   - Flask app setup
-  - Static file routes (/, /css, /js, /join)
+  - Static file routes (/, /css, /js, /join, /stats)
   - One route function per API endpoint
 
 Game logic lives in:  game_engine.py
 Bot decisions live in: bot.py
 Bot turn driver in:   bot_runner.py
 Room/session store in: room_manager.py
+Mass simulation in:   sim_runner.py
 
 Run:
     pip install flask
@@ -26,14 +27,15 @@ from game_engine import GamePhase
 from room_manager import Room, rooms, make_room_code
 from bot_runner import bot_act_if_needed
 from bvb_runner import bvb_step, bvb_run_full
-from bot import SimpleBot
+from bot import SimpleBot, BOT_REGISTRY
+from sim_runner import create_simulation, get_simulation_status, get_simulation_result
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, static_folder=BASE_DIR)
 
 
-# ─── CORS (allow LAN cross-origin requests) ───────────────────────────────────
+# ─── CORS ─────────────────────────────────────────────────────────────────────
 
 @app.after_request
 def add_cors(response):
@@ -63,6 +65,11 @@ def ok(**data):
 def index():
     return send_from_directory(BASE_DIR, "index.html")
 
+@app.route("/stats")
+@app.route("/stats.html")
+def stats_page():
+    return send_from_directory(BASE_DIR, "stats.html")
+
 @app.route("/join/<room_id>")
 def join_page(room_id):
     return send_from_directory(BASE_DIR, "index.html")
@@ -90,7 +97,6 @@ def _get_local_ip() -> str:
 
 
 def _get_room(room_id: str):
-    """Look up a room by code. Returns (room, engine) or (None, None)."""
     room_id = room_id.upper()
     if room_id not in rooms:
         return None, None
@@ -99,10 +105,6 @@ def _get_room(room_id: str):
 
 
 def _action(room_id: str, perspective_idx: int, fn):
-    """
-    Generic wrapper for single-step game actions.
-    Runs fn(), triggers the bot if HvB, returns updated state.
-    """
     room, engine = _get_room(room_id)
     if room is None:
         return err("Room not found", 404)
@@ -120,6 +122,14 @@ def _action(room_id: str, perspective_idx: int, fn):
     return ok(state=state)
 
 
+# ─── Bot registry route ───────────────────────────────────────────────────────
+
+@app.route("/api/bots/list", methods=["GET"])
+def list_bots():
+    """Return all available bot names from the registry."""
+    return ok(bots=list(BOT_REGISTRY.keys()))
+
+
 # ─── Room management routes ───────────────────────────────────────────────────
 
 @app.route("/api/create_room", methods=["POST"])
@@ -128,8 +138,8 @@ def create_room():
     host_name   = body.get("player_name", "Host")[:20]
     mode        = body.get("mode", "hvb")
     target      = int(body.get("target_score", 7))
-    room_id   = make_room_code()
-    room      = Room(room_id, host_name, mode, target)
+    room_id     = make_room_code()
+    room        = Room(room_id, host_name, mode, target)
     rooms[room_id] = room
 
     local_ip  = _get_local_ip()
@@ -253,12 +263,6 @@ def play_cards(room_id: str):
 
 @app.route("/api/room/<room_id>/play_only", methods=["POST"])
 def play_cards_only(room_id: str):
-    """
-    Two-step HvB play (step 1 of 2).
-    Plays human cards WITHOUT running the bot, so the frontend can
-    animate the human's cards onto the table before the bot responds.
-    Follow up with /bot_respond after the animation finishes.
-    """
     room, engine = _get_room(room_id)
     if room is None:
         return err("Room not found", 404)
@@ -273,17 +277,11 @@ def play_cards_only(room_id: str):
     if not result:
         return err(engine.error or "Action failed.")
 
-    # Return intermediate state (before bot acts)
     return ok(state=engine.get_state(perspective_idx=pidx))
 
 
 @app.route("/api/room/<room_id>/bot_respond", methods=["POST"])
 def bot_respond(room_id: str):
-    """
-    Two-step HvB play (step 2 of 2).
-    Triggers the bot and returns the resulting state.
-    Called by the frontend after the human's play animation finishes.
-    """
     room, engine = _get_room(room_id)
     if room is None:
         return err("Room not found", 404)
@@ -342,19 +340,6 @@ def skip_calculate(room_id: str):
 
 @app.route("/api/room/<room_id>/dev/deal_specific", methods=["POST"])
 def dev_deal_specific(room_id: str):
-    """
-    DEV ONLY — Reset the round and deal specific cards to each player.
-    Works at ANY time during a round — no phase restriction.
-
-    Body: {
-        "player_idx": 0,              -- perspective for returned state
-        "p0": ["AH", "KH", "QH"],    -- up to 3 cards for player 0 (you)
-        "p1": ["AD", "KD", "QD"],    -- up to 3 cards for player 1 (opponent)
-        "trump": "TH"                 -- optional: which card is trump
-    }
-    Card format: rank (A T K Q J) + suit (H D C S). e.g. "AH" = Ace of Hearts.
-    Empty slots are filled randomly. Scores are preserved; everything else resets.
-    """
     room, engine = _get_room(room_id)
     if room is None:
         return err("Room not found", 404)
@@ -371,7 +356,6 @@ def dev_deal_specific(room_id: str):
     if not result:
         return err(engine.error or "dev_deal_specific failed.")
 
-    # Run bot if it goes first in the new round
     if room.mode == "hvb":
         bot_act_if_needed(engine)
 
@@ -379,32 +363,42 @@ def dev_deal_specific(room_id: str):
     return ok(state=state)
 
 
-# ─── BvB routes ──────────────────────────────────────────────────────────────
+# ─── BvB spectator routes ─────────────────────────────────────────────────────
 
 @app.route("/api/create_bvb", methods=["POST"])
 def create_bvb():
-    """Create a Bot vs Bot room. Returns room_id and initial state."""
-    body   = request.get_json(silent=True) or {}
-    target = int(body.get("target_score", 7))
+    """Create a Bot vs Bot spectator room."""
+    body      = request.get_json(silent=True) or {}
+    target    = int(body.get("target_score", 7))
+    bot_a_name = body.get("bot_a", "SimpleBot")
+    bot_b_name = body.get("bot_b", "AggressiveBot")
 
-    from game_engine import GameEngine, HumanPlayer
+    if bot_a_name not in BOT_REGISTRY:
+        return err(f"Unknown bot: {bot_a_name}")
+    if bot_b_name not in BOT_REGISTRY:
+        return err(f"Unknown bot: {bot_b_name}")
+
+    BotA = BOT_REGISTRY[bot_a_name]
+    BotB = BOT_REGISTRY[bot_b_name]
+
     room_id = make_room_code()
-    room    = Room(room_id, "Bot A", "bvb", target)
+    room    = Room(room_id, bot_a_name, "bvb", target)
     rooms[room_id] = room
 
-    p1 = SimpleBot("p1", "Bot A")
-    p2 = SimpleBot("p2", "Bot B")
+    p1 = BotA("p1", bot_a_name)
+    p2 = BotB("p2", bot_b_name)
     room.engine = GameEngine(p1, p2, target_score=target)
     room.engine.start_round()
     room.status = "playing"
 
+    # Return full debug state — spectator sees everything
     state = room.engine.get_state(debug=True)
     return ok(room_id=room_id, state=state)
 
 
 @app.route("/api/room/<room_id>/bvb_step", methods=["POST"])
 def bvb_step_route(room_id: str):
-    """Advance the BvB game by exactly one bot action. Returns new state + action taken."""
+    """Advance the BvB game by exactly one bot action."""
     room, engine = _get_room(room_id)
     if room is None:
         return err("Room not found", 404)
@@ -426,13 +420,68 @@ def bvb_run_route(room_id: str):
         return err("Game not started.")
 
     body      = request.get_json(silent=True) or {}
-    max_steps = int(body.get("max_steps", 2000))
-    history   = bvb_run_full(engine, max_steps)
-    state     = engine.get_state(debug=True)
+    max_steps = int(body.get("max_steps", 5000))
+
+    from bvb_runner import bvb_run_full
+    history = bvb_run_full(engine, max_steps)
+    state   = engine.get_state(debug=True)
     return ok(state=state, history=history)
 
 
+# ─── Simulation routes ────────────────────────────────────────────────────────
+
+@app.route("/api/sim/start", methods=["POST"])
+def sim_start():
+    """
+    Start a mass simulation.
+    Body: {
+        "pairs":       [["SimpleBot","AggressiveBot"], ...],
+        "games":       1000,
+        "target_score": 7
+    }
+    """
+    body   = request.get_json(silent=True) or {}
+    pairs  = body.get("pairs", [])
+    games  = int(body.get("games", 1000))
+    target = int(body.get("target_score", 7))
+
+    if not pairs:
+        return err("No matchup pairs provided.")
+    if games < 1 or games > 100000:
+        return err("games must be between 1 and 100000.")
+
+    # Validate all bot names
+    for pair in pairs:
+        if len(pair) != 2:
+            return err("Each pair must have exactly 2 bot names.")
+        for name in pair:
+            if name not in BOT_REGISTRY:
+                return err(f"Unknown bot: {name}")
+
+    sim_id = create_simulation([(a, b) for a, b in pairs], games, target)
+    return ok(sim_id=sim_id)
+
+
+@app.route("/api/sim/status/<sim_id>", methods=["GET"])
+def sim_status(sim_id: str):
+    status = get_simulation_status(sim_id)
+    if status is None:
+        return err("Simulation not found", 404)
+    return ok(**status)
+
+
+@app.route("/api/sim/result/<sim_id>", methods=["GET"])
+def sim_result(sim_id: str):
+    result = get_simulation_result(sim_id)
+    if result is None:
+        return err("Simulation not found", 404)
+    return ok(**result)
+
+
 # ─── Entry point ──────────────────────────────────────────────────────────────
+
+# Late import to avoid circular import issues
+from game_engine import GameEngine
 
 if __name__ == "__main__":
     port     = int(os.environ.get("PORT", 5000))
@@ -441,5 +490,6 @@ if __name__ == "__main__":
     print(f"  BURA Server")
     print(f"  Local:   http://localhost:{port}")
     print(f"  Network: http://{local_ip}:{port}  ← share for LAN play")
+    print(f"  Stats:   http://localhost:{port}/stats")
     print(f"{'='*55}\n")
     app.run(host="0.0.0.0", debug=True, port=port)

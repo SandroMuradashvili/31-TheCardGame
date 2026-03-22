@@ -6,6 +6,136 @@
 <title>BURA — Thirty-One</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Source+Code+Pro:wght@400;600&family=Crimson+Pro:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/css/style.css">
+<style>
+/* ═══════════════════════════════════════════════
+   BvB Spectator UI Styles
+   ═══════════════════════════════════════════════ */
+:root {
+  --bvb-bg:       #0a1a10;
+  --bvb-panel:    rgba(8,24,14,0.92);
+  --bvb-border:   rgba(200,168,75,0.22);
+  --bvb-gold:     #c8a84b;
+  --bvb-gold-dim: #7a6228;
+  --bvb-green:    #2e7d52;
+  --bvb-red:      #c0392b;
+  --bvb-text:     #e8e0d0;
+  --bvb-dim:      #5a7a5a;
+  --bvb-felt:     #1a4a2e;
+  --bvb-trump:    rgba(200,168,75,0.55);
+}
+
+#bvb-ui {
+  display: none;
+  min-height: 100vh;
+  background: var(--bvb-bg);
+  background-image:
+    radial-gradient(ellipse at 50% -10%, rgba(34,85,53,0.4) 0%, transparent 65%),
+    repeating-linear-gradient(45deg, transparent, transparent 9px,
+      rgba(255,255,255,0.01) 9px, rgba(255,255,255,0.01) 10px);
+  font-family: 'Crimson Pro', Georgia, serif;
+  color: var(--bvb-text);
+  padding: 10px;
+}
+
+/* ── Layout ─────────────────────────────────── */
+.bvb-wrap       { max-width: 1100px; margin: 0 auto; }
+.bvb-header     { display:flex; justify-content:space-between; align-items:center; padding:10px 16px; background:var(--bvb-panel); border:1px solid var(--bvb-border); border-radius:10px; margin-bottom:8px; }
+.bvb-logo       { font-family:'Playfair Display',serif; font-size:1.4rem; font-weight:900; color:var(--bvb-gold); letter-spacing:.1em; }
+.bvb-logo span  { color:var(--bvb-dim); font-size:.6rem; letter-spacing:.25em; display:block; margin-top:-2px; text-transform:uppercase; }
+.bvb-hdr-right  { display:flex; gap:8px; align-items:center; }
+
+/* ── Score bar ──────────────────────────────── */
+.bvb-score-bar  { display:flex; gap:0; background:var(--bvb-panel); border:1px solid var(--bvb-border); border-radius:10px; margin-bottom:8px; overflow:hidden; }
+.bvb-player-box { flex:1; padding:10px 16px; transition:background .3s; }
+.bvb-player-box.bvb-active-player { background:rgba(200,168,75,0.1); }
+.bvb-player-name{ font-size:.65rem; letter-spacing:.18em; color:var(--bvb-dim); text-transform:uppercase; margin-bottom:2px; }
+.bvb-player-score{ font-family:'Playfair Display',serif; font-size:2.4rem; color:var(--bvb-gold); line-height:1; }
+.bvb-player-type { font-size:.6rem; color:var(--bvb-dim); margin-top:2px; }
+.bvb-meta-box   { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:10px 20px; border-left:1px solid var(--bvb-border); border-right:1px solid var(--bvb-border); gap:2px; }
+.bvb-meta-label { font-size:.55rem; letter-spacing:.15em; color:var(--bvb-dim); text-transform:uppercase; }
+.bvb-meta-val   { font-family:'Playfair Display',serif; font-size:1.5rem; color:var(--bvb-gold); line-height:1; }
+.bvb-target-box { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:10px 16px; }
+.bvb-vs-divider { display:flex; align-items:center; padding:0 12px; color:var(--bvb-dim); font-size:1rem; }
+
+/* ── Main grid ──────────────────────────────── */
+.bvb-main-grid  { display:grid; grid-template-columns:1fr 260px; gap:8px; margin-bottom:8px; }
+.bvb-left       { display:flex; flex-direction:column; gap:8px; }
+.bvb-right      { display:flex; flex-direction:column; gap:8px; }
+
+/* ── Panels ─────────────────────────────────── */
+.bvb-panel      { background:var(--bvb-panel); border:1px solid var(--bvb-border); border-radius:10px; padding:12px 14px; }
+.bvb-panel-title{ font-size:.6rem; letter-spacing:.2em; color:var(--bvb-dim); text-transform:uppercase; margin-bottom:8px; }
+
+/* ── Hand display ───────────────────────────── */
+.bvb-hand-wrap  { display:flex; flex-wrap:wrap; gap:5px; min-height:32px; align-items:center; }
+.bvb-hand-card  { display:inline-block; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.14); border-radius:5px; padding:3px 8px; font-family:'Source Code Pro',monospace; font-size:.88rem; font-weight:600; letter-spacing:.02em; transition:background .15s; }
+.bvb-trump-card { border-color:var(--bvb-gold) !important; box-shadow:0 0 6px var(--bvb-trump); background:rgba(200,168,75,0.08) !important; }
+.bvb-hidden     { background:rgba(255,255,255,0.03); border-color:rgba(255,255,255,0.08); color:var(--bvb-dim); }
+.bvb-no-cards   { color:var(--bvb-dim); font-style:italic; font-size:.82rem; }
+.bvb-red        { color:#e74c3c; }
+.bvb-blk        { color:#c8c0b0; }
+.bvb-trump-suit { text-shadow:0 0 8px var(--bvb-trump); }
+
+/* Player hand box with name header */
+.bvb-player-hand { background:var(--bvb-panel); border:1px solid var(--bvb-border); border-radius:10px; padding:10px 14px; transition:border-color .3s; }
+.bvb-player-hand.bvb-active-player { border-color:rgba(200,168,75,0.5); }
+.bvb-hand-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+.bvb-hand-name  { font-family:'Playfair Display',serif; font-size:.95rem; font-weight:700; }
+.bvb-hand-badge { font-size:.58rem; letter-spacing:.12em; text-transform:uppercase; padding:2px 8px; border-radius:20px; background:rgba(200,168,75,0.15); color:var(--bvb-gold); border:1px solid rgba(200,168,75,0.3); }
+.bvb-active-badge { background:var(--bvb-gold); color:#1a1208; animation:bvbPulse 1.5s ease infinite; }
+@keyframes bvbPulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+
+/* ── Table (played cards) ───────────────────── */
+.bvb-table-area { background:var(--bvb-felt); border:1.5px solid rgba(200,168,75,0.15); border-radius:12px; padding:16px; min-height:90px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; box-shadow:inset 0 2px 20px rgba(0,0,0,0.4); }
+.bvb-table-label{ font-size:.6rem; letter-spacing:.2em; color:rgba(255,255,255,0.3); text-transform:uppercase; }
+.bvb-table-cards-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:center; min-height:36px; }
+.bvb-table-card { display:inline-block; background:rgba(255,255,255,0.92); border:1.5px solid #d0c4a8; border-radius:7px; padding:4px 10px; font-family:'Source Code Pro',monospace; font-size:1.1rem; font-weight:700; color:#1a1208; box-shadow:2px 3px 8px rgba(0,0,0,0.4); }
+.bvb-table-card.bvb-red { color:#c0392b; }
+.bvb-table-card.bvb-trump-card { border-color:var(--bvb-gold); box-shadow:0 0 0 1.5px var(--bvb-gold),0 0 12px var(--bvb-trump),2px 3px 8px rgba(0,0,0,0.4); }
+.bvb-table-empty { color:rgba(255,255,255,0.25); font-style:italic; font-size:.85rem; }
+.bvb-maliutka-tag { background:rgba(192,57,43,0.2); border:1px solid rgba(192,57,43,0.5); color:#e74c3c; font-size:.7rem; letter-spacing:.15em; padding:2px 10px; border-radius:20px; text-transform:uppercase; }
+
+/* ── Trump info ─────────────────────────────── */
+.bvb-trump-row  { display:flex; align-items:center; gap:10px; }
+.bvb-trump-big  { font-family:'Source Code Pro',monospace; font-size:1.5rem; font-weight:700; }
+.bvb-suit-sep   { color:var(--bvb-dim); font-size:.7rem; }
+.bvb-deck-list  { font-family:'Source Code Pro',monospace; font-size:.78rem; line-height:2; letter-spacing:.03em; flex-wrap:wrap; display:flex; gap:4px 0; flex-direction:column; }
+
+/* ── Pile bars ──────────────────────────────── */
+.bvb-pile-info  { font-size:.78rem; line-height:1.9; }
+.bvb-pile-known { color:var(--bvb-gold); font-weight:600; margin-right:6px; }
+.bvb-pile-hidden{ color:var(--bvb-dim); margin-right:6px; }
+.bvb-pile-true  { color:#7ec89a; font-weight:600; margin-right:6px; }
+.bvb-pile-count { color:var(--bvb-dim); }
+.bvb-pile-bar   { height:4px; background:rgba(255,255,255,0.08); border-radius:2px; margin-top:5px; overflow:hidden; }
+.bvb-pile-bar-fill { height:100%; border-radius:2px; background:var(--bvb-dim); transition:width .4s ease; }
+.bvb-bar-close  { background:var(--bvb-gold); }
+.bvb-bar-win    { background:#2e7d52; }
+
+/* ── Action log ─────────────────────────────── */
+.bvb-log-list   { max-height:180px; overflow-y:auto; scroll-behavior:smooth; }
+.bvb-log-entry  { padding:2px 0; border-bottom:1px solid rgba(255,255,255,0.04); font-size:.75rem; color:var(--bvb-dim); }
+.bvb-log-latest { color:var(--bvb-text); font-weight:600; }
+
+/* ── Controls ───────────────────────────────── */
+.bvb-controls   { background:var(--bvb-panel); border:1px solid var(--bvb-border); border-radius:10px; padding:12px 14px; }
+.bvb-ctrl-row   { display:flex; gap:7px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+.bvb-ctrl-row:last-child { margin-bottom:0; }
+.bvb-status-txt { font-size:.75rem; color:var(--bvb-dim); margin-top:4px; min-height:1.2em; }
+.bvb-speed-row  { display:flex; gap:5px; align-items:center; }
+.bvb-speed-label{ font-size:.6rem; letter-spacing:.12em; color:var(--bvb-dim); text-transform:uppercase; margin-right:4px; }
+.bvb-speed-btn  { font-family:'Crimson Pro',serif; font-size:.75rem; padding:4px 10px; border:1px solid rgba(255,255,255,0.14); border-radius:6px; background:transparent; color:var(--bvb-dim); cursor:pointer; transition:all .15s; }
+.bvb-speed-btn:hover { color:var(--bvb-text); border-color:rgba(255,255,255,0.28); }
+.bvb-speed-active { background:rgba(200,168,75,0.15); border-color:var(--bvb-gold); color:var(--bvb-gold); }
+
+/* ── Phase badge ────────────────────────────── */
+.bvb-phase-badge{ font-size:.58rem; letter-spacing:.15em; color:var(--bvb-dim); text-transform:uppercase; padding:2px 10px; border:1px solid var(--bvb-border); border-radius:20px; }
+
+/* ── Responsive ─────────────────────────────── */
+@media (max-width:700px) {
+  .bvb-main-grid { grid-template-columns:1fr; }
+}
+</style>
 </head>
 <body>
 
@@ -22,7 +152,9 @@
   </div>
 </div>
 
-<!-- ─── LOBBY ──────────────────────────────── -->
+<!-- ═══════════════════════════════════════════
+     LOBBY
+═══════════════════════════════════════════ -->
 <div id="lobby">
   <div class="lobby-box">
     <div class="lobby-title">BURA</div>
@@ -81,28 +213,46 @@
     <!-- BvB -->
     <div id="tab-bvb-content" style="display:none;">
       <div class="field">
+        <label>Bot A</label>
+        <select id="bvb-lobby-bot-a"></select>
+      </div>
+      <div class="field">
+        <label>Bot B</label>
+        <select id="bvb-lobby-bot-b"></select>
+      </div>
+      <div class="field">
         <label>Target Score</label>
-        <select id="lb-target-bvb">
+        <select id="bvb-target">
           <option value="7" selected>7 pts</option>
           <option value="11">11 pts</option>
         </select>
       </div>
       <div class="field">
-        <label>Speed</label>
-        <select id="lb-bvb-speed">
-          <option value="0"    selected>Manual (click to step)</option>
-          <option value="500"  >Slow (0.5s per step)</option>
-          <option value="200"  >Normal (0.2s per step)</option>
-          <option value="50"   >Fast (0.05s per step)</option>
-          <option value="instant">Instant (no animation)</option>
+        <label>Playback Speed</label>
+        <select id="bvb-speed">
+          <option value="0" selected>Manual (step by step)</option>
+          <option value="800">Slow (0.8s / step)</option>
+          <option value="350">Normal (0.35s / step)</option>
+          <option value="100">Fast (0.1s / step)</option>
+          <option value="30">Very Fast (0.03s / step)</option>
         </select>
       </div>
-      <button class="btn btn-gold" style="width:100%;padding:12px;margin-top:6px;" onclick="startBvB()">Watch Game</button>
+      <!-- Hidden fields read by enterBvB() -->
+      <input type="hidden" id="bvb-bot-a">
+      <input type="hidden" id="bvb-bot-b">
+      <button class="btn btn-gold" style="width:100%;padding:12px;margin-top:6px;" onclick="bvbLobbyStart()">Watch Game</button>
+      <div style="text-align:center;margin-top:10px;">
+        <a href="/stats" style="color:var(--text-dim);font-size:.75rem;letter-spacing:.1em;text-decoration:none;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:1px;">
+          ⚡ Mass simulation &amp; statistics →
+        </a>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- ─── GAME UI ────────────────────────────── -->
+<!-- ═══════════════════════════════════════════
+     HvB / HvH GAME UI (unchanged)
+═══════════════════════════════════════════ -->
 <div id="game-ui">
 
   <header>
@@ -154,7 +304,6 @@
     <div class="dbg-hand"><label>P2 PILE: </label><span id="dbg-p2p"></span></div>
     <div class="dbg-hand"><label>DECK TOP5: </label><span id="dbg-deck"></span></div>
     <div class="dbg-log" id="dbg-log"></div>
-    <!-- Developer hand editor — rendered by dev_tools.js -->
     <div id="dev-hand-editor"></div>
   </div>
 
@@ -214,22 +363,170 @@
   </div>
 </div>
 
+
+<!-- ═══════════════════════════════════════════
+     BvB SPECTATOR UI
+═══════════════════════════════════════════ -->
+<div id="bvb-ui">
+  <div class="bvb-wrap">
+
+    <!-- Header -->
+    <div class="bvb-header">
+      <div class="bvb-logo">BURA <span>Bot Spectator</span></div>
+      <div class="bvb-hdr-right">
+        <span class="bvb-phase-badge" id="bvb-phase-txt">—</span>
+        <button class="btn btn-ghost btn-sm" onclick="exitBvB()">◀ Menu</button>
+      </div>
+    </div>
+
+    <!-- Score bar -->
+    <div class="bvb-score-bar">
+      <div class="bvb-player-box" id="bvb-player-0">
+        <div class="bvb-player-name" id="bvb-name-0">Bot A</div>
+        <div class="bvb-player-score" id="bvb-score-0">0</div>
+        <div class="bvb-player-type">Player 0</div>
+      </div>
+      <div class="bvb-vs-divider">vs</div>
+      <div class="bvb-player-box" id="bvb-player-1" style="text-align:right;">
+        <div class="bvb-player-name" id="bvb-name-1">Bot B</div>
+        <div class="bvb-player-score" id="bvb-score-1">0</div>
+        <div class="bvb-player-type">Player 1</div>
+      </div>
+      <div class="bvb-meta-box">
+        <div class="bvb-meta-label">Round</div>
+        <div class="bvb-meta-val" id="bvb-round-num">0</div>
+      </div>
+      <div class="bvb-meta-box">
+        <div class="bvb-meta-label">Stake</div>
+        <div class="bvb-meta-val" id="bvb-stake-num">1</div>
+      </div>
+      <div class="bvb-target-box">
+        <div class="bvb-meta-label">Target</div>
+        <div class="bvb-meta-val" id="bvb-target-val">7</div>
+        <div class="bvb-meta-label">pts</div>
+      </div>
+    </div>
+
+    <!-- Main content grid -->
+    <div class="bvb-main-grid">
+
+      <!-- Left column: hands + table + piles -->
+      <div class="bvb-left">
+
+        <!-- Bot A hand -->
+        <div class="bvb-player-hand" id="bvb-player-hand-0">
+          <div class="bvb-hand-header">
+            <span class="bvb-hand-name" id="bvb-hand-name-0">Bot A</span>
+            <span class="bvb-hand-badge" id="bvb-hand-badge-0">Player 0</span>
+          </div>
+          <div class="bvb-hand-wrap" id="bvb-hand-0"></div>
+        </div>
+
+        <!-- Table -->
+        <div class="bvb-table-area">
+          <div class="bvb-table-label">TABLE</div>
+          <div class="bvb-table-cards-row" id="bvb-table-cards"></div>
+        </div>
+
+        <!-- Bot B hand -->
+        <div class="bvb-player-hand" id="bvb-player-hand-1">
+          <div class="bvb-hand-header">
+            <span class="bvb-hand-name" id="bvb-hand-name-1">Bot B</span>
+            <span class="bvb-hand-badge" id="bvb-hand-badge-1">Player 1</span>
+          </div>
+          <div class="bvb-hand-wrap" id="bvb-hand-1"></div>
+        </div>
+
+        <!-- Piles -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="bvb-panel">
+            <div class="bvb-panel-title" id="bvb-pile-name-0">Bot A — Pile</div>
+            <div class="bvb-pile-info" id="bvb-pile-0">—</div>
+            <div class="bvb-pile-bar"><div class="bvb-pile-bar-fill" id="bvb-pile-bar-0" style="width:0%"></div></div>
+          </div>
+          <div class="bvb-panel">
+            <div class="bvb-panel-title" id="bvb-pile-name-1">Bot B — Pile</div>
+            <div class="bvb-pile-info" id="bvb-pile-1">—</div>
+            <div class="bvb-pile-bar"><div class="bvb-pile-bar-fill" id="bvb-pile-bar-1" style="width:0%"></div></div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right column: trump, deck, log, controls -->
+      <div class="bvb-right">
+
+        <!-- Trump + deck info -->
+        <div class="bvb-panel">
+          <div class="bvb-panel-title">Trump</div>
+          <div class="bvb-trump-row" style="margin-bottom:10px;">
+            <div class="bvb-trump-big" id="bvb-trump-display">—</div>
+          </div>
+          <div class="bvb-panel-title" style="margin-top:8px;">
+            Deck — <span id="bvb-deck-count">20 cards</span>
+          </div>
+          <div class="bvb-deck-list" id="bvb-deck-list">—</div>
+        </div>
+
+        <!-- Controls -->
+        <div class="bvb-controls">
+          <div class="bvb-panel-title">Playback</div>
+          <div class="bvb-ctrl-row">
+            <button class="btn btn-gold btn-sm" id="bvb-btn-step"  onclick="bvbManualStep()">Step →</button>
+            <button class="btn btn-green btn-sm" id="bvb-btn-play" onclick="bvbStartAuto()">▶ Play</button>
+            <button class="btn btn-ghost btn-sm" id="bvb-btn-pause" onclick="bvbStopAuto()">⏸ Pause</button>
+          </div>
+          <div class="bvb-speed-row" style="flex-wrap:wrap;gap:4px;">
+            <span class="bvb-speed-label">Speed:</span>
+            <button class="bvb-speed-btn" data-speed="800" onclick="bvbChangeSpeed(800)">0.8s</button>
+            <button class="bvb-speed-btn" data-speed="350" onclick="bvbChangeSpeed(350)">0.35s</button>
+            <button class="bvb-speed-btn" data-speed="100" onclick="bvbChangeSpeed(100)">0.1s</button>
+            <button class="bvb-speed-btn" data-speed="30"  onclick="bvbChangeSpeed(30)">0.03s</button>
+          </div>
+          <div class="bvb-status-txt" id="bvb-status">Ready.</div>
+        </div>
+
+        <!-- Action log -->
+        <div class="bvb-panel" style="flex:1;">
+          <div class="bvb-panel-title">Action Log</div>
+          <div class="bvb-log-list" id="bvb-action-log"></div>
+        </div>
+
+      </div>
+    </div><!-- /main grid -->
+
+  </div><!-- /bvb-wrap -->
+</div><!-- /bvb-ui -->
+
+
 <!--
-  Scripts — load order matters. Each file depends only on files above it.
-  See ARCHITECTURE.md for the full dependency map.
+  Scripts — load order matters.
 -->
-<script src="/js/state.js"></script>           <!-- Global State object + constants      -->
-<script src="/js/utils.js"></script>           <!-- toast, api, logAction, ROOM helpers  -->
-<script src="/js/animations.js"></script>      <!-- Card movement animations             -->
-<script src="/js/cards.js"></script>           <!-- Card HTML builder + selection logic  -->
-<script src="/js/render.js"></script>          <!-- DOM rendering (zones, table, trump)  -->
-<script src="/js/actions_render.js"></script>  <!-- Action panel UI + pass mode          -->
-<script src="/js/dev_tools.js"></script>       <!-- Dev hand editor (debug mode only)    -->
-<script src="/js/stake_actions.js"></script>   <!-- Stake raise / accept / decline       -->
-<script src="/js/game_actions.js"></script>    <!-- Play / cut / pass / calculate        -->
-<script src="/js/lobby.js"></script>           <!-- Lobby, rooms, polling, keyboard      -->
+<script src="/js/state.js"></script>
+<script src="/js/utils.js"></script>
+<script src="/js/animations.js"></script>
+<script src="/js/cards.js"></script>
+<script src="/js/render.js"></script>
+<script src="/js/actions_render.js"></script>
+<script src="/js/dev_tools.js"></script>
+<script src="/js/stake_actions.js"></script>
+<script src="/js/game_actions.js"></script>
+<script src="/js/bvb_ui.js"></script>
+<script src="/js/lobby.js"></script>
 <script>
   checkUrlJoin();
+
+  // BvB lobby bridge — copy hidden bot selects before calling enterBvB
+  window.bvbLobbyStart = function() {
+    document.getElementById('bvb-bot-a').value = document.getElementById('bvb-lobby-bot-a').value;
+    document.getElementById('bvb-bot-b').value = document.getElementById('bvb-lobby-bot-b').value;
+    enterBvB();
+  };
+
+  // Populate bot dropdowns when BvB tab is activated
+  document.getElementById('tab-bvb').addEventListener('click', () => {
+    bvbInitLobby();
+  });
 </script>
 </body>
 </html>

@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BURA — Bot Statistics Lab</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Source+Code+Pro:wght@400;600&family=Crimson+Pro:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+/* ═══════════════════════════════════════════════
+   BURA Stats Lab
+   ═══════════════════════════════════════════════ */
+:root {
+  --bg:       #080f0a;
+  --bg2:      #0d1a10;
+  --panel:    rgba(8,20,12,0.95);
+  --border:   rgba(200,168,75,0.2);
+  --gold:     #c8a84b;
+  --gold2:    rgba(200,168,75,0.15);
+  --green:    #2e7d52;
+  --green2:   rgba(46,125,82,0.15);
+  --red:      #c0392b;
+  --text:     #e8e0d0;
+  --dim:      #5a7a5a;
+  --dim2:     #3a5a3a;
+  --mono:     'Source Code Pro', monospace;
+  --serif:    'Playfair Display', serif;
+  --body:     'Crimson Pro', Georgia, serif;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  background: var(--bg);
+  background-image:
+    radial-gradient(ellipse at 20% 0%, rgba(46,125,82,0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 100%, rgba(200,168,75,0.06) 0%, transparent 50%);
+  font-family: var(--body);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+.wrap { max-width: 1200px; margin: 0 auto; padding: 16px; }
+
+/* ── Header ─────────────────────────────────── */
+.page-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 20px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 12px; margin-bottom: 16px;
+}
+.page-logo { font-family: var(--serif); font-size: 1.5rem; font-weight: 900; color: var(--gold); letter-spacing: .1em; }
+.page-logo span { display: block; font-size: .58rem; color: var(--dim); letter-spacing: .3em; text-transform: uppercase; margin-top: -2px; font-weight: 400; font-family: var(--body); }
+.back-link { color: var(--dim); font-size: .78rem; letter-spacing: .1em; text-decoration: none; border: 1px solid rgba(255,255,255,.1); padding: 5px 12px; border-radius: 6px; transition: all .2s; }
+.back-link:hover { color: var(--text); border-color: rgba(255,255,255,.25); }
+
+/* ── Two-column layout ──────────────────────── */
+.main-grid { display: grid; grid-template-columns: 380px 1fr; gap: 14px; }
+@media (max-width: 900px) { .main-grid { grid-template-columns: 1fr; } }
+
+/* ── Config panel ───────────────────────────── */
+.config-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+.section-title {
+  font-size: .6rem; letter-spacing: .25em; color: var(--dim); text-transform: uppercase;
+  margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,.06);
+}
+
+.field { margin-bottom: 12px; }
+.field label { font-size: .68rem; letter-spacing: .1em; color: var(--dim); display: block; margin-bottom: 4px; text-transform: uppercase; }
+.field input, .field select {
+  width: 100%; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
+  border-radius: 7px; padding: 8px 12px; color: var(--text);
+  font-family: var(--body); font-size: .95rem; outline: none; transition: border-color .2s;
+}
+.field input:focus, .field select:focus { border-color: var(--gold); }
+.field select option { background: #0d1a10; }
+
+/* ── Matchup builder ────────────────────────── */
+#matchup-list { margin-bottom: 12px; }
+.matchup-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.07); border-radius: 7px; margin-bottom: 5px;
+}
+.matchup-row .m-a { color: var(--gold); font-family: var(--mono); font-size: .8rem; font-weight: 600; }
+.matchup-row .m-vs { color: var(--dim); font-size: .7rem; }
+.matchup-row .m-b { color: #7ec89a; font-family: var(--mono); font-size: .8rem; font-weight: 600; }
+.matchup-del { margin-left: auto; background: none; border: none; color: var(--dim); cursor: pointer; font-size: .9rem; transition: color .15s; }
+.matchup-del:hover { color: var(--red); }
+.add-matchup-row { display: flex; gap: 6px; align-items: center; margin-bottom: 14px; }
+.add-matchup-row select { flex: 1; font-size: .82rem; padding: 6px 10px; }
+
+/* ── Buttons ─────────────────────────────────── */
+.btn {
+  font-family: var(--body); font-size: .88rem; font-weight: 600;
+  padding: 9px 18px; border: none; border-radius: 7px; cursor: pointer;
+  transition: all .15s; letter-spacing: .04em;
+}
+.btn:disabled { opacity: .3; cursor: not-allowed; }
+.btn-gold  { background: linear-gradient(135deg, #c8a84b, #9a7828); color: #1a1208; box-shadow: 0 2px 8px rgba(200,168,75,.3); }
+.btn-gold:hover:not(:disabled) { box-shadow: 0 4px 14px rgba(200,168,75,.5); transform: translateY(-1px); }
+.btn-ghost { background: transparent; color: var(--dim); border: 1px solid rgba(255,255,255,.14); }
+.btn-ghost:hover:not(:disabled) { color: var(--text); border-color: rgba(255,255,255,.28); }
+.btn-sm { font-size: .76rem; padding: 5px 11px; }
+.btn-green { background: linear-gradient(135deg, #2e7d52, #1a5234); color: #e8e0d0; border: 1px solid rgba(200,168,75,.2); }
+
+/* ── Results panel ──────────────────────────── */
+.results-panel { display: flex; flex-direction: column; gap: 14px; }
+
+/* Live grid */
+#live-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.match-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; transition: border-color .3s;
+}
+.match-card.done { border-color: rgba(46,125,82,.4); }
+.mc-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.mc-bots { font-family: var(--mono); font-size: .8rem; }
+.mc-bot-a { color: var(--gold); }
+.mc-bot-b { color: #7ec89a; }
+.mc-vs    { color: var(--dim); margin: 0 4px; }
+.mc-pct   { font-family: var(--serif); font-size: 1.1rem; color: var(--gold); }
+.mc-prog-bar { height: 3px; background: rgba(255,255,255,.06); border-radius: 2px; margin-bottom: 8px; overflow: hidden; }
+.mc-prog-fill { height: 100%; background: var(--gold); border-radius: 2px; transition: width .5s ease; }
+.mc-prog-fill.done { background: var(--green); }
+.mc-stats { display: flex; justify-content: space-between; font-size: .72rem; color: var(--dim); }
+.mc-stats .mc-wins-a { color: var(--gold); }
+.mc-stats .mc-wins-b { color: #7ec89a; }
+.mc-eta { font-size: .65rem; color: var(--dim2); margin-top: 4px; text-align: right; }
+
+/* Overall progress bar */
+.overall-bar-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.ob-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.ob-title { font-size: .65rem; letter-spacing: .15em; color: var(--dim); text-transform: uppercase; }
+.ob-pct { font-family: var(--serif); font-size: 1.4rem; color: var(--gold); }
+.ob-bar { height: 6px; background: rgba(255,255,255,.06); border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
+.ob-fill { height: 100%; background: linear-gradient(90deg, #2e7d52, #c8a84b); border-radius: 3px; transition: width .8s ease; }
+.ob-meta { display: flex; gap: 16px; font-size: .7rem; color: var(--dim); }
+
+/* ── Result tables ───────────────────────────── */
+.result-section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+.rs-title { font-family: var(--serif); font-size: 1.1rem; color: var(--gold); margin-bottom: 14px; }
+
+.stat-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+.stat-table th { font-size: .58rem; letter-spacing: .15em; color: var(--dim); text-transform: uppercase; text-align: left; padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,.07); }
+.stat-table td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,.04); vertical-align: top; }
+.stat-table tr:last-child td { border-bottom: none; }
+.stat-table .sv { font-family: var(--mono); font-size: .82rem; }
+.stat-table .highlight { color: var(--gold); font-weight: 600; }
+.stat-table .good { color: #7ec89a; }
+.stat-table .bad { color: #e87c6e; }
+
+.winner-badge { display: inline-block; background: rgba(200,168,75,.15); border: 1px solid rgba(200,168,75,.3); color: var(--gold); font-size: .58rem; letter-spacing: .1em; padding: 1px 7px; border-radius: 20px; text-transform: uppercase; margin-left: 6px; vertical-align: middle; }
+
+/* ── Charts ─────────────────────────────────── */
+.charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 700px) { .charts-grid { grid-template-columns: 1fr; } }
+.chart-box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.chart-title { font-size: .62rem; letter-spacing: .15em; color: var(--dim); text-transform: uppercase; margin-bottom: 10px; }
+.chart-box canvas { max-height: 220px; }
+
+/* ── Bot aggregate cards ─────────────────────── */
+.bot-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.bot-agg-card { background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.07); border-radius: 9px; padding: 12px 14px; }
+.bot-agg-name { font-family: var(--mono); font-size: .9rem; color: var(--gold); margin-bottom: 8px; font-weight: 600; }
+.bot-stat-row { display: flex; justify-content: space-between; font-size: .75rem; padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,.03); }
+.bot-stat-row:last-child { border-bottom: none; }
+.bot-stat-label { color: var(--dim); }
+.bot-stat-val { font-family: var(--mono); color: var(--text); }
+
+/* ── Download bar ────────────────────────────── */
+.download-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.dl-note { font-size: .72rem; color: var(--dim); }
+
+/* ── Empty / loading states ─────────────────── */
+.empty-state { text-align: center; padding: 40px; color: var(--dim); font-size: .85rem; font-style: italic; }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--dim); border-top-color: var(--gold); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; margin-right: 5px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <div class="page-header">
+    <div class="page-logo">BURA <span>Bot Statistics Lab</span></div>
+    <a href="/" class="back-link">◀ Back to Game</a>
+  </div>
+
+  <div class="main-grid">
+
+    <!-- ── Config panel ─────────────────────── -->
+    <div class="config-panel">
+      <div class="section-title">Configure Simulation</div>
+
+      <!-- Add matchup -->
+      <div class="section-title" style="margin-top:0;">Matchups</div>
+      <div id="matchup-list">
+        <div class="empty-state" id="matchup-empty">No matchups added yet.</div>
+      </div>
+      <div class="add-matchup-row">
+        <select id="add-bot-a"></select>
+        <span style="color:var(--dim);font-size:.8rem;">vs</span>
+        <select id="add-bot-b"></select>
+        <button class="btn btn-ghost btn-sm" onclick="addMatchup()">+ Add</button>
+      </div>
+      <button class="btn btn-ghost btn-sm" style="width:100%;margin-bottom:16px;" onclick="addAllPairs()">+ All unique pairs</button>
+
+      <div class="field">
+        <label>Games per matchup</label>
+        <select id="cfg-games">
+          <option value="100">100</option>
+          <option value="500">500</option>
+          <option value="1000" selected>1 000</option>
+          <option value="5000">5 000</option>
+          <option value="10000">10 000</option>
+          <option value="50000">50 000</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Target score per game</label>
+        <select id="cfg-target">
+          <option value="7" selected>7 pts</option>
+          <option value="11">11 pts</option>
+        </select>
+      </div>
+
+      <button class="btn btn-gold" style="width:100%;padding:11px;" id="run-btn" onclick="runSim()">⚡ Run Simulation</button>
+      <div id="run-error" style="color:#e87c6e;font-size:.75rem;margin-top:6px;min-height:1em;"></div>
+    </div>
+
+    <!-- ── Results panel ─────────────────────── -->
+    <div class="results-panel" id="results-panel">
+      <div class="empty-state">Configure matchups on the left and hit Run.</div>
+    </div>
+
+  </div><!-- /main-grid -->
+</div><!-- /wrap -->
+
+<script>
+'use strict';
+// ─────────────────────────────────────────────
+// stats.js — inline, no external deps beyond Chart.js
+// ─────────────────────────────────────────────
+
+let _bots      = [];
+let _matchups  = [];   // [{a, b}]
+let _simId     = null;
+let _pollTimer = null;
+let _lastResult = null;
+let _charts    = {};
+
+// ── Init ──────────────────────────────────────
+async function init() {
+  const res  = await fetch('/api/bots/list');
+  const data = await res.json();
+  _bots = data.bots || [];
+  _populateBotSelects();
+}
+
+function _populateBotSelects() {
+  ['add-bot-a', 'add-bot-b'].forEach(id => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = _bots.map(b => `<option value="${b}">${b}</option>`).join('');
+  });
+  // Default second select to second bot if available
+  const selB = document.getElementById('add-bot-b');
+  if (_bots.length > 1) selB.value = _bots[1];
+}
+
+// ── Matchup management ────────────────────────
+function addMatchup() {
+  const a = document.getElementById('add-bot-a').value;
+  const b = document.getElementById('add-bot-b').value;
+  if (a === b) { setErr('Cannot match a bot against itself.'); return; }
+  // No duplicates (either direction)
+  const dup = _matchups.some(m => (m.a===a&&m.b===b)||(m.a===b&&m.b===a));
+  if (dup) { setErr('This matchup already exists.'); return; }
+  _matchups.push({ a, b });
+  setErr('');
+  renderMatchupList();
+}
+
+function addAllPairs() {
+  const added = [];
+  for (let i = 0; i < _bots.length; i++) {
+    for (let j = i+1; j < _bots.length; j++) {
+      const a = _bots[i], b = _bots[j];
+      const dup = _matchups.some(m => (m.a===a&&m.b===b)||(m.a===b&&m.b===a));
+      if (!dup) { _matchups.push({a,b}); added.push(`${a} vs ${b}`); }
+    }
+  }
+  if (!added.length) setErr('All unique pairs already added.');
+  else { setErr(''); renderMatchupList(); }
+}
+
+function removeMatchup(idx) {
+  _matchups.splice(idx, 1);
+  renderMatchupList();
+}
+
+function renderMatchupList() {
+  const el = document.getElementById('matchup-list');
+  const em = document.getElementById('matchup-empty');
+  if (!_matchups.length) {
+    el.innerHTML = '';
+    el.appendChild(em);
+    em.style.display = '';
+    return;
+  }
+  em.style.display = 'none';
+  el.innerHTML = _matchups.map((m,i) => `
+    <div class="matchup-row">
+      <span class="m-a">${m.a}</span>
+      <span class="m-vs">vs</span>
+      <span class="m-b">${m.b}</span>
+      <button class="matchup-del" onclick="removeMatchup(${i})" title="Remove">✕</button>
+    </div>
+  `).join('');
+}
+
+function setErr(msg) {
+  document.getElementById('run-error').textContent = msg;
+}
+
+// ── Run simulation ────────────────────────────
+async function runSim() {
+  if (!_matchups.length) { setErr('Add at least one matchup.'); return; }
+  setErr('');
+  stopPoll();
+
+  const games  = parseInt(document.getElementById('cfg-games').value);
+  const target = parseInt(document.getElementById('cfg-target').value);
+  const pairs  = _matchups.map(m => [m.a, m.b]);
+
+  const runBtn = document.getElementById('run-btn');
+  runBtn.disabled = true;
+  runBtn.textContent = 'Starting…';
+
+  const res  = await fetch('/api/sim/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pairs, games, target_score: target }),
+  });
+  const data = await res.json();
+
+  runBtn.disabled  = false;
+  runBtn.textContent = '⚡ Run Simulation';
+
+  if (!data.success) { setErr(data.error || 'Failed to start.'); return; }
+  _simId = data.sim_id;
+  renderLivePanel(_matchups.map(m => ({ bot_a: m.a, bot_b: m.b, games, completed: 0, progress: 0, done: false, wins_a: 0, wins_b: 0, eta: null })));
+  startPoll();
+}
+
+// ── Polling ───────────────────────────────────
+function startPoll() {
+  stopPoll();
+  _pollTimer = setInterval(_poll, 600);
+  _poll();
+}
+
+function stopPoll() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+async function _poll() {
+  if (!_simId) return;
+  const res  = await fetch(`/api/sim/status/${_simId}`);
+  const data = await res.json();
+  if (!data.success) return;
+
+  updateLivePanel(data);
+
+  if (data.done) {
+    stopPoll();
+    // Fetch full result
+    const rRes  = await fetch(`/api/sim/result/${_simId}`);
+    const rData = await rRes.json();
+    if (rData.success) {
+      _lastResult = rData;
+      renderResults(rData);
+    }
+  }
+}
+
+// ── Live panel ────────────────────────────────
+function renderLivePanel(matchups) {
+  const panel = document.getElementById('results-panel');
+  panel.innerHTML = `
+    <div class="overall-bar-wrap" id="ob-wrap">
+      <div class="ob-header">
+        <span class="ob-title">Overall Progress</span>
+        <span class="ob-pct" id="ob-pct">0%</span>
+      </div>
+      <div class="ob-bar"><div class="ob-fill" id="ob-fill" style="width:0%"></div></div>
+      <div class="ob-meta">
+        <span><span class="spinner" id="ob-spinner"></span>Running…</span>
+        <span id="ob-eta"></span>
+      </div>
+    </div>
+    <div id="live-grid"></div>
+  `;
+  const grid = document.getElementById('live-grid');
+  grid.innerHTML = matchups.map((m,i) => `
+    <div class="match-card" id="mc-${i}">
+      <div class="mc-header">
+        <div class="mc-bots">
+          <span class="mc-bot-a">${m.bot_a}</span>
+          <span class="mc-vs">vs</span>
+          <span class="mc-bot-b">${m.bot_b}</span>
+        </div>
+        <span class="mc-pct" id="mc-pct-${i}">0%</span>
+      </div>
+      <div class="mc-prog-bar"><div class="mc-prog-fill" id="mc-fill-${i}" style="width:0%"></div></div>
+      <div class="mc-stats">
+        <span class="mc-wins-a" id="mc-wa-${i}">A: 0W</span>
+        <span style="color:var(--dim2)">${m.games} games</span>
+        <span class="mc-wins-b" id="mc-wb-${i}">B: 0W</span>
+      </div>
+      <div class="mc-eta" id="mc-eta-${i}"></div>
+    </div>
+  `).join('');
+}
+
+function updateLivePanel(data) {
+  // Overall
+  const obPct  = document.getElementById('ob-pct');
+  const obFill = document.getElementById('ob-fill');
+  const obEta  = document.getElementById('ob-eta');
+  const obSpin = document.getElementById('ob-spinner');
+  if (obPct)  obPct.textContent  = `${data.progress}%`;
+  if (obFill) obFill.style.width = `${data.progress}%`;
+  if (obEta && data.eta)  obEta.textContent = `ETA: ${_fmtTime(data.eta)}`;
+  if (obSpin && data.done) obSpin.style.display = 'none';
+
+  // Per matchup
+  (data.matchups || []).forEach((m, i) => {
+    const pct  = document.getElementById(`mc-pct-${i}`);
+    const fill = document.getElementById(`mc-fill-${i}`);
+    const wa   = document.getElementById(`mc-wa-${i}`);
+    const wb   = document.getElementById(`mc-wb-${i}`);
+    const eta  = document.getElementById(`mc-eta-${i}`);
+    const card = document.getElementById(`mc-${i}`);
+    if (pct)  pct.textContent  = `${m.progress}%`;
+    if (fill) { fill.style.width = `${m.progress}%`; if (m.done) fill.classList.add('done'); }
+    if (wa)   wa.textContent   = `${m.bot_a}: ${m.wins_a}W`;
+    if (wb)   wb.textContent   = `${m.bot_b}: ${m.wins_b}W`;
+    if (eta)  eta.textContent  = m.done ? '✓ Done' : (m.eta ? `ETA: ${_fmtTime(m.eta)}` : '');
+    if (card && m.done) card.classList.add('done');
+  });
+}
+
+function _fmtTime(secs) {
+  if (secs < 60) return `${Math.round(secs)}s`;
+  return `${Math.floor(secs/60)}m ${Math.round(secs%60)}s`;
+}
+
+// ── Results ───────────────────────────────────
+function renderResults(data) {
+  const panel = document.getElementById('results-panel');
+
+  const existingOb   = document.getElementById('ob-wrap');
+  const existingGrid = document.getElementById('live-grid');
+  const spinner = document.getElementById('ob-spinner');
+  if (spinner) spinner.style.display = 'none';
+
+  // Append results below existing live grid
+  const resultsDiv = document.createElement('div');
+  resultsDiv.style.cssText = 'display:flex;flex-direction:column;gap:14px;';
+  resultsDiv.innerHTML = `
+    <!-- Download -->
+    <div class="result-section">
+      <div class="rs-title">Results Ready</div>
+      <div class="download-bar">
+        <button class="btn btn-gold btn-sm" onclick="downloadJSON()">↓ JSON</button>
+        <button class="btn btn-ghost btn-sm" onclick="downloadCSV()">↓ CSV</button>
+        <span class="dl-note">Elapsed: ${data.elapsed}s total</span>
+      </div>
+    </div>
+
+    <!-- Per-matchup tables -->
+    <div class="result-section">
+      <div class="rs-title">Matchup Results</div>
+      ${data.matchups.map(m => _renderMatchupTable(m)).join('')}
+    </div>
+
+    <!-- Charts -->
+    <div class="charts-grid" id="charts-grid">
+      <div class="chart-box">
+        <div class="chart-title">Win Rate (%)</div>
+        <canvas id="chart-winrate"></canvas>
+      </div>
+      <div class="chart-box">
+        <div class="chart-title">Avg Rounds per Game</div>
+        <canvas id="chart-rounds"></canvas>
+      </div>
+      <div class="chart-box">
+        <div class="chart-title">Calculate Success Rate (%)</div>
+        <canvas id="chart-calc"></canvas>
+      </div>
+      <div class="chart-box">
+        <div class="chart-title">Cut Rate vs Pass Rate (%)</div>
+        <canvas id="chart-cutpass"></canvas>
+      </div>
+    </div>
+
+    <!-- Bot aggregate -->
+    <div class="result-section">
+      <div class="rs-title">Bot Aggregates (all matchups combined)</div>
+      <div class="bot-cards">
+        ${Object.entries(data.bot_summary).map(([name, s]) => _renderBotCard(name, s)).join('')}
+      </div>
+    </div>
+  `;
+  panel.appendChild(resultsDiv);
+
+  // Draw charts after DOM insertion
+  setTimeout(() => _drawCharts(data), 100);
+}
+
+function _renderMatchupTable(m) {
+  const sa = m.stats_a;
+  const sb = m.stats_b;
+  const winnerA = sa.wins > sb.wins;
+  const winnerB = sb.wins > sa.wins;
+  const rows = [
+    ['Win rate', `${sa.win_rate}%`, `${sb.win_rate}%`],
+    ['Wins', sa.wins, sb.wins],
+    ['Avg rounds/game', sa.avg_rounds_per_game, sb.avg_rounds_per_game],
+    ['Avg stake', sa.avg_stake, sb.avg_stake],
+    ['Stake raises', sa.stake_raises, sb.stake_raises],
+    ['Stake raise rate', `${sa.stake_raise_rate}%`, `${sb.stake_raise_rate}%`],
+    ['Stake declines', sa.stake_declines, sb.stake_declines],
+    ['Calculate attempts', sa.calculate_attempts, sb.calculate_attempts],
+    ['Calculate success', `${sa.calculate_success_rate}%`, `${sb.calculate_success_rate}%`],
+    ['Avg pts at calc', sa.avg_points_at_calculate, sb.avg_points_at_calculate],
+    ['3-trump plays', sa.three_trumps, sb.three_trumps],
+    ['Cut rate', `${sa.cut_rate}%`, `${sb.cut_rate}%`],
+    ['Pass rate', `${sa.pass_rate}%`, `${sb.pass_rate}%`],
+    ['Counter plays', sa.counter_plays, sb.counter_plays],
+  ];
+  return `
+    <div style="margin-bottom:20px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span style="font-family:var(--mono);font-size:.85rem;color:var(--gold)">${m.bot_a}</span>
+        ${winnerA ? '<span class="winner-badge">winner</span>' : ''}
+        <span style="color:var(--dim)">vs</span>
+        <span style="font-family:var(--mono);font-size:.85rem;color:#7ec89a">${m.bot_b}</span>
+        ${winnerB ? '<span class="winner-badge">winner</span>' : ''}
+        <span style="margin-left:auto;font-size:.65rem;color:var(--dim)">${m.games} games · ${m.elapsed}s</span>
+      </div>
+      <table class="stat-table">
+        <thead><tr>
+          <th>Metric</th>
+          <th>${m.bot_a}</th>
+          <th>${m.bot_b}</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(([label, a, b]) => {
+            const aStr = String(a);
+            const bStr = String(b);
+            const aNum = parseFloat(aStr);
+            const bNum = parseFloat(bStr);
+            const aWins = !isNaN(aNum) && !isNaN(bNum) && aNum > bNum;
+            const bWins = !isNaN(aNum) && !isNaN(bNum) && bNum > aNum;
+            return `<tr>
+              <td>${label}</td>
+              <td class="sv ${aWins?'good':''}">${aStr}</td>
+              <td class="sv ${bWins?'good':''}">${bStr}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function _renderBotCard(name, s) {
+  const rows = [
+    ['Win rate',          `${s.win_rate}%`],
+    ['Games played',      s.games],
+    ['Avg rounds/game',   s.avg_rounds_per_game],
+    ['Avg stake',         s.avg_stake],
+    ['Stake raise rate',  `${s.stake_raise_rate}%`],
+    ['Calc success',      `${s.calculate_success_rate}%`],
+    ['Avg pts at calc',   s.avg_points_at_calculate],
+    ['3-trump plays',     s.three_trumps],
+    ['Cut rate',          `${s.cut_rate}%`],
+    ['Pass rate',         `${s.pass_rate}%`],
+    ['Counter plays',     s.counter_plays],
+  ];
+  return `
+    <div class="bot-agg-card">
+      <div class="bot-agg-name">${name}</div>
+      ${rows.map(([l,v]) => `
+        <div class="bot-stat-row">
+          <span class="bot-stat-label">${l}</span>
+          <span class="bot-stat-val">${v}</span>
+        </div>`).join('')}
+    </div>
+  `;
+}
+
+// ── Charts ────────────────────────────────────
+function _drawCharts(data) {
+  const GOLD  = 'rgba(200,168,75,0.85)';
+  const GREEN = 'rgba(46,125,82,0.85)';
+  const DIM   = 'rgba(90,120,90,0.85)';
+  const defaults = {
+    responsive: true,
+    plugins: { legend: { labels: { color: '#e8e0d0', font: { size: 11 } } } },
+    scales: {
+      x: { ticks: { color: '#5a7a5a', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,.04)' } },
+      y: { ticks: { color: '#5a7a5a', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,.04)' } },
+    },
+  };
+
+  const labels = data.matchups.map(m => `${m.bot_a} vs ${m.bot_b}`);
+
+  // Win rate
+  _makeChart('chart-winrate', 'bar', {
+    labels,
+    datasets: [
+      { label: 'Bot A win %', data: data.matchups.map(m => m.stats_a.win_rate), backgroundColor: GOLD },
+      { label: 'Bot B win %', data: data.matchups.map(m => m.stats_b.win_rate), backgroundColor: GREEN },
+    ],
+  }, { ...defaults, scales: { ...defaults.scales, y: { ...defaults.scales.y, max: 100 } } });
+
+  // Avg rounds
+  _makeChart('chart-rounds', 'bar', {
+    labels,
+    datasets: [
+      { label: 'Bot A', data: data.matchups.map(m => m.stats_a.avg_rounds_per_game), backgroundColor: GOLD },
+      { label: 'Bot B', data: data.matchups.map(m => m.stats_b.avg_rounds_per_game), backgroundColor: GREEN },
+    ],
+  }, defaults);
+
+  // Calculate success
+  _makeChart('chart-calc', 'bar', {
+    labels,
+    datasets: [
+      { label: 'Bot A calc %', data: data.matchups.map(m => m.stats_a.calculate_success_rate), backgroundColor: GOLD },
+      { label: 'Bot B calc %', data: data.matchups.map(m => m.stats_b.calculate_success_rate), backgroundColor: GREEN },
+    ],
+  }, { ...defaults, scales: { ...defaults.scales, y: { ...defaults.scales.y, max: 100 } } });
+
+  // Cut vs Pass
+  const cutPassLabels = [];
+  const cutData = [], passData = [];
+  data.matchups.forEach(m => {
+    cutPassLabels.push(`${m.bot_a} cut`, `${m.bot_b} cut`);
+    cutData.push(m.stats_a.cut_rate, m.stats_b.cut_rate);
+    passData.push(m.stats_a.pass_rate, m.stats_b.pass_rate);
+  });
+  _makeChart('chart-cutpass', 'bar', {
+    labels: cutPassLabels,
+    datasets: [
+      { label: 'Cut %',  data: cutData,  backgroundColor: GOLD },
+      { label: 'Pass %', data: passData, backgroundColor: DIM  },
+    ],
+  }, { ...defaults, scales: { ...defaults.scales, y: { ...defaults.scales.y, max: 100 } } });
+}
+
+function _makeChart(id, type, chartData, options) {
+  const canvas = document.getElementById(id);
+  if (!canvas) return;
+  if (_charts[id]) _charts[id].destroy();
+  _charts[id] = new Chart(canvas, { type, data: chartData, options });
+}
+
+// ── Download ──────────────────────────────────
+function downloadJSON() {
+  if (!_lastResult) return;
+  const blob = new Blob([JSON.stringify(_lastResult, null, 2)], { type: 'application/json' });
+  _dl(blob, 'bura_sim_results.json');
+}
+
+function downloadCSV() {
+  if (!_lastResult) return;
+  const rows = [['matchup','bot','games','win_rate','avg_rounds','avg_stake','stake_raise_rate',
+                 'calculate_success_rate','avg_pts_at_calc','three_trumps','cut_rate','pass_rate','counter_plays']];
+  _lastResult.matchups.forEach(m => {
+    [[m.bot_a, m.stats_a],[m.bot_b, m.stats_b]].forEach(([name, s]) => {
+      rows.push([
+        `${m.bot_a}vs${m.bot_b}`, name, m.games,
+        s.win_rate, s.avg_rounds_per_game, s.avg_stake, s.stake_raise_rate,
+        s.calculate_success_rate, s.avg_points_at_calculate,
+        s.three_trumps, s.cut_rate, s.pass_rate, s.counter_plays,
+      ]);
+    });
+  });
+  const csv  = rows.map(r => r.join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  _dl(blob, 'bura_sim_results.csv');
+}
+
+function _dl(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a   = document.createElement('a');
+  a.href = url; a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Boot ──────────────────────────────────────
+init();
+</script>
+</body>
+</html>
