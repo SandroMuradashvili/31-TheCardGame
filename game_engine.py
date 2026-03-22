@@ -612,7 +612,7 @@ class GameEngine:
 
         # Original player takes their played cards back (known)
         original_player = self.players[self.playing_player_idx]
-        original_player.add_to_pile(self.played_cards, hidden=False)
+        original_player.hand.extend(self.played_cards)
 
         # Counter cards go on the table — original player must now cut or pass
         cutter.remove_from_hand(counter)

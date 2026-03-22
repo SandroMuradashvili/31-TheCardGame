@@ -1,19 +1,10 @@
 'use strict';
-// ─────────────────────────────────────────────────────────────────────────────
-// render.js — DOM rendering: zones, table, trump strip, score, modal, tip
-// ─────────────────────────────────────────────────────────────────────────────
-// Depends on: state.js, utils.js, animations.js, cards.js
-// Loaded by:  index.html (after cards.js)
-// ─────────────────────────────────────────────────────────────────────────────
-
-
-// ─── Main render ─────────────────────────────────────────────────────────────
+// render.js — DOM rendering
 
 window.render = function() {
   const s = State.gameState;
   if (!s) return;
 
-  // Header scores + meta
   document.getElementById('sn0').textContent        = s.players[0].name;
   document.getElementById('sn1').textContent        = s.players[1].name;
   updateScore(0, s.players[0].game_score);
@@ -23,14 +14,16 @@ window.render = function() {
   document.getElementById('stake-num').textContent  = s.current_stake;
 
   renderTrump(s);
-  renderZone(0, s);
-  renderZone(1, s);
+
+  // Always: bottom DOM slot (zone-0/hand-0) = my cards, top slot = opponent
+  renderZone(State.myPlayerIdx,         s, 0);
+  renderZone(1 - State.myPlayerIdx,     s, 1);
+
   renderTable(s);
   renderActions(s);
 
   if (State.debugMode) { renderDebug(s); renderDevTools(); }
 
-  // Show round/game-over modal once per terminal phase
   if ((s.phase === 'round_over' || s.phase === 'game_over') && !State.modalShown) {
     State.modalShown = true;
     setTimeout(() => showRoundModal(s), 600);
@@ -40,9 +33,7 @@ window.render = function() {
   }
 };
 
-
 // ─── Score ────────────────────────────────────────────────────────────────────
-
 window.updateScore = function(idx, val) {
   const el = document.getElementById(`sv${idx}`);
   el.textContent = val;
@@ -53,9 +44,7 @@ window.updateScore = function(idx, val) {
   }
 };
 
-
-// ─── Trump strip + deck widget ────────────────────────────────────────────────
-
+// ─── Trump strip ──────────────────────────────────────────────────────────────
 window.renderTrump = function(s) {
   const suit = s.trump_suit;
   const card = s.trump_card;
@@ -69,29 +58,30 @@ window.renderTrump = function(s) {
   document.getElementById('deck-count-text').textContent   = `${s.deck.size} left`;
   document.getElementById('deck-count-widget').textContent = s.deck.size;
   const depleted = s.deck.size === 0;
-  document.getElementById('deck-stack').style.opacity       = depleted ? '0.3' : '1';
+  document.getElementById('deck-stack').style.opacity = depleted ? '0.3' : '1';
 
   const tc = document.getElementById('trump-card-in-deck');
   tc.innerHTML = card ? buildTrumpCard(card) : '';
   tc.style.opacity = depleted ? '0.3' : '1';
 };
 
-
 // ─── Player zones ─────────────────────────────────────────────────────────────
+// playerIdx = which player's data (0 or 1 in the server state array)
+// domSlot   = which DOM zone to render into (0 = bottom/me, 1 = top/opponent)
+window.renderZone = function(playerIdx, s, domSlot) {
+  if (domSlot === undefined) domSlot = playerIdx;
 
-window.renderZone = function(idx, s) {
-  const player   = s.players[idx];
-  const isMe     = idx === State.myPlayerIdx;
-  const isActive = s.active_player_idx === idx && s.phase === 'playing';
+  const player   = s.players[playerIdx];
+  const isMe     = playerIdx === State.myPlayerIdx;
+  const isActive = s.active_player_idx === playerIdx && s.phase === 'playing';
 
-  document.getElementById(`zone-name-${idx}`).textContent = player.name;
-  document.getElementById(`zone-${idx}`).classList.toggle('active-turn', isActive);
+  document.getElementById(`zone-name-${domSlot}`).textContent = player.name;
+  document.getElementById(`zone-${domSlot}`).classList.toggle('active-turn', isActive);
 
-  const pill = document.getElementById(`active-pill-${idx}`);
+  const pill = document.getElementById(`active-pill-${domSlot}`);
   pill.innerHTML = isActive ? '<span class="active-pill">YOUR TURN</span>' : '';
 
-  // Pile info line
-  const pi = document.getElementById(`pile-info-${idx}`);
+  const pi = document.getElementById(`pile-info-${domSlot}`);
   let pileText = '';
   if (isMe || State.debugMode) {
     const known = player.known_pile_points;
@@ -106,8 +96,8 @@ window.renderZone = function(idx, s) {
     pileText = `${player.pile_count} cards`;
   }
 
-  // Preserve the tip icon button when rebuilding pile-info innerHTML
-  if (isMe) {
+  // domSlot 0 = my zone (bottom) — preserve the tip button
+  if (domSlot === 0) {
     const tipBtn = pi.querySelector('.tip-icon-btn');
     pi.innerHTML = pileText;
     if (tipBtn) pi.appendChild(tipBtn);
@@ -115,29 +105,35 @@ window.renderZone = function(idx, s) {
     pi.innerHTML = pileText;
   }
 
-  const container   = document.getElementById(`hand-${idx}`);
+  const container   = document.getElementById(`hand-${domSlot}`);
   const revealCards = State.debugMode || isMe;
   const canSelect   = isMe && canSelectCards(s);
-  renderHandCards(container, player.hand, canSelect, idx, s, revealCards);
+  // Track hand keys by playerIdx (not domSlot) so diffs are against correct player
+  renderHandCards(container, player.hand, canSelect, playerIdx, s, revealCards);
 };
 
+// ─── Hand rendering ───────────────────────────────────────────────────────────
 window.renderHandCards = function(container, hand, canSelect, playerIdx, s, revealCards) {
-  // For hidden cards (opponent), use positional keys like 'h0','h1','h2'
-  // so we can detect when a new card is added (count change), not just identity change.
-  const makeKey = (cards) => JSON.stringify(
-    cards.map((c, i) => c.id || `h${i}`)
-  );
-  const newKey = makeKey(hand);
-  const oldKey = State.prevHandKeys[playerIdx] || '[]';
+  const makeKey = (cards) => JSON.stringify(cards.map((c, i) => c.id || `h${i}`));
+  const newKey  = makeKey(hand);
+  const oldKey  = State.prevHandKeys[playerIdx] || '[]';
+  // Also track whether cards were selectable last render — if it changed, force rebuild
+  // so no-hover class and click listeners are correctly updated
+  const selectKey = `${newKey}|${canSelect}`;
+  const oldSelectKey = State.prevHandSelectKeys?.[playerIdx] || '';
+  if (!State.prevHandSelectKeys) State.prevHandSelectKeys = ['', ''];
 
-  if (newKey === oldKey && !State.debugMode) {
+  if (newKey === oldKey && selectKey === oldSelectKey && !State.debugMode) {
     container.querySelectorAll('.card[data-id]').forEach(el =>
       el.classList.toggle('selected', State.selectedCards.includes(el.dataset.id))
     );
     return;
   }
 
-  const oldIds   = JSON.parse(oldKey);
+  const oldIds = JSON.parse(oldKey);
+  // Check wasEmpty BEFORE clearing the container.
+  // If we clear first and then check children.length, it's always 0 → wasEmpty=true
+  // → all cards animate from deck even though the player already had them.
   const wasEmpty = oldIds.length === 0 || container.children.length === 0;
   const deckRect = getDeckRect();
 
@@ -160,31 +156,24 @@ window.renderHandCards = function(container, hand, canSelect, playerIdx, s, reve
     const el = wrapper.firstElementChild;
     container.appendChild(el);
 
-    // Use positional key for hidden cards so new cards are always detected
     const cardKey = card.id || `h${i}`;
+    // Only animate cards that are genuinely new (not in previous hand)
     if (wasEmpty || !oldIds.includes(cardKey)) newEls.push({ el, i });
 
     if (card.id && canSelect && revealCards)
       el.addEventListener('click', () => toggleCard(card.id));
   });
 
-  // Hide new cards immediately so they don't flash at final position
-  // before the fly animation starts. flyCard will make them visible.
+  // Hide new cards first so they don't flash at final position
   newEls.forEach(({ el }) => { el.style.opacity = '0'; });
+  // Stagger deal animation only for genuinely new cards
+  newEls.forEach(({ el, i }) => setTimeout(() => flyCard(el, deckRect, 260), i * 80));
 
-  // Stagger deal animation for newly arrived cards only
-  newEls.forEach(({ el, i }) => {
-    setTimeout(() => flyCard(el, deckRect, 260), i * 80);
-  });
-
-  State.prevHandKeys[playerIdx] = newKey;
+  State.prevHandKeys[playerIdx]       = newKey;
+  State.prevHandSelectKeys[playerIdx] = selectKey;
 };
 
-
-// ─── Table (played cards zone) ────────────────────────────────────────────────
-// This function owns the #played-row DOM.
-// It populates it when cards are played, and leaves cleanup to the sweep animations.
-
+// ─── Table ────────────────────────────────────────────────────────────────────
 window.renderTable = function(s) {
   const row   = document.getElementById('played-row');
   const label = document.getElementById('table-label');
@@ -194,15 +183,15 @@ window.renderTable = function(s) {
     label.className   = s.is_maliutka ? 'zone-label maliutka' : 'zone-label';
 
     const newKey = s.played_cards.map(c => c.id).join(',');
-    if (newKey === State.prevPlayedKey) return; // no change, skip re-render
-
+    if (newKey === State.prevPlayedKey) return;
     State.prevPlayedKey = newKey;
-    const fromPlayerIdx = s.playing_player_idx ?? State.myPlayerIdx;
 
-    // Clear any leftover ghost elements from a previous pass animation
     row.querySelectorAll('.pass-ghost').forEach(el => el.remove());
     row.innerHTML = '';
 
+    const fromPlayerIdx = s.playing_player_idx ?? State.myPlayerIdx;
+    // Convert server player index → DOM slot (slot 0 = bottom = me, slot 1 = top = opponent)
+    const fromDomSlot = fromPlayerIdx === State.myPlayerIdx ? 0 : 1;
     s.played_cards.forEach(card => {
       const isTrump = s.trump_suit && card.suit === s.trump_suit;
       const wrapper = document.createElement('div');
@@ -214,10 +203,9 @@ window.renderTable = function(s) {
     });
 
     State.tableCards = s.played_cards.map((c, i) => ({ card: c, el: row.children[i] }));
-    animatePlayToTable(row.querySelectorAll('.table-card'), fromPlayerIdx, null);
+    animatePlayToTable(row.querySelectorAll('.table-card'), fromDomSlot, null);
 
   } else {
-    // played_cards is empty — update the label; sweep animation handles DOM cleanup
     const phaseLabels = {
       waiting:     'Waiting…',
       stakes:      'Stake negotiation — raise or play',
@@ -232,16 +220,14 @@ window.renderTable = function(s) {
     label.className   = s.phase === 'forced_cut' ? 'zone-label maliutka' : 'zone-label';
 
     if (State.prevPlayedKey !== '') {
-      // Cards were cleared server-side (cut/pass resolved).
-      // Sweep animation already ran from game_actions.js — just clear the key.
       State.prevPlayedKey = '';
+      // Immediately remove any lingering table cards (HvH observer side)
+      row.querySelectorAll('.table-card, .pass-ghost, .cut-card-anim').forEach(el => el.remove());
     }
   }
 };
 
-
 // ─── Debug panel ──────────────────────────────────────────────────────────────
-
 window.renderDebug = function(s) {
   document.getElementById('dbg-phase').textContent  = s.phase;
   document.getElementById('dbg-stake').textContent  = `${s.current_stake}→${s.pending_stake}`;
@@ -269,9 +255,7 @@ window.renderDebug = function(s) {
     ).join('\n');
 };
 
-
 // ─── Round / game-over modal ──────────────────────────────────────────────────
-
 window.showRoundModal = function(s) {
   const isGameOver = s.phase === 'game_over';
   const wIdx   = s.round_winner_idx ?? 0;
@@ -288,6 +272,7 @@ window.showRoundModal = function(s) {
     title.className   = `modal-title ${iWon ? 'win' : 'lose'}`;
     sub.textContent   = `${winner.name} reached ${s.target_score} points. Game over!`;
     btn.textContent   = 'Play Again';
+    btn.disabled      = false;
     btn.onclick       = showLobby;
   } else {
     title.textContent = iWon ? '✓ You Win!' : `${winner.name} Wins`;
@@ -301,8 +286,16 @@ window.showRoundModal = function(s) {
     };
     sub.textContent = (reasons[s.round_end_reason] || s.round_end_reason)
                     + `  (Stake: ${s.current_stake})`;
-    btn.textContent = 'Next Round →';
-    btn.onclick     = doStartRound;
+
+    if (State.gameMode === 'hvh' && State.myPlayerIdx !== 0) {
+      btn.textContent = 'Waiting for host…';
+      btn.disabled    = true;
+      btn.onclick     = null;
+    } else {
+      btn.textContent = 'Next Round →';
+      btn.disabled    = false;
+      btn.onclick     = doStartRound;
+    }
   }
 
   scores.innerHTML = s.players.map(p => `
@@ -314,9 +307,7 @@ window.showRoundModal = function(s) {
   document.getElementById('round-modal').classList.add('visible');
 };
 
-
 // ─── Score tip popup ──────────────────────────────────────────────────────────
-
 window.toggleTip = function(evt) {
   if (evt) evt.stopPropagation();
   State.showTip = !State.showTip;
@@ -333,12 +324,12 @@ window.toggleTip = function(evt) {
       if (me) {
         iconBtn?.classList.add('active');
         renderTip({
-          known_points:      me.known_pile_points,
-          hidden_count:      me.hidden_card_count,
-          min_total:         me.known_pile_points + me.hidden_card_count * 2,
-          max_total:         me.known_pile_points + me.hidden_card_count * 11,
-          can_possibly_win:  (me.known_pile_points + me.hidden_card_count * 11) >= 31,
-          guaranteed_win:    (me.known_pile_points + me.hidden_card_count * 2)  >= 31,
+          known_points:     me.known_pile_points,
+          hidden_count:     me.hidden_card_count,
+          min_total:        me.known_pile_points + me.hidden_card_count * 2,
+          max_total:        me.known_pile_points + me.hidden_card_count * 11,
+          can_possibly_win: (me.known_pile_points + me.hidden_card_count * 11) >= 31,
+          guaranteed_win:   (me.known_pile_points + me.hidden_card_count * 2)  >= 31,
         }, container);
       }
     }

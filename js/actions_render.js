@@ -2,10 +2,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // actions_render.js — Action panel HTML + pass mode UI
 // ─────────────────────────────────────────────────────────────────────────────
-// Depends on: state.js, cards.js, render.js (renderZone)
-// Stake API calls  → stake_actions.js
-// Card API calls   → game_actions.js
-// ─────────────────────────────────────────────────────────────────────────────
 
 window.renderActions = function(s) {
   const msgEl  = document.getElementById('action-msg');
@@ -19,7 +15,10 @@ window.renderActions = function(s) {
   const sel  = State.selectedCards.length;
 
   const iAmActive  = s.active_player_idx  === myPlayerIdx;
+  // iAmPlaying = I was the one who put cards on the table (I attacked)
   const iAmPlaying = s.playing_player_idx === myPlayerIdx;
+  // iAmCutter  = I must respond to cards on the table (I defend/cut/pass)
+  const iAmCutter  = s.playing_player_idx !== null && s.playing_player_idx !== myPlayerIdx;
   const iAmCalc    = s.calculator_idx     === myPlayerIdx;
 
   const pendingFromMe  = s.stake_offerer_idx === myPlayerIdx;
@@ -27,12 +26,7 @@ window.renderActions = function(s) {
   const canRaise       = (s.can_raise_stake || [])[myPlayerIdx] === true;
 
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // STAKE INTERCEPTS — these take over the whole panel when stake negotiation
-  // is happening. Same behaviour regardless of which game phase we're in.
-  // ══════════════════════════════════════════════════════════════════════════
-
-  // Opponent raised — I must respond before anything else
+  // ── Stake intercepts ──────────────────────────────────────────────────────
   if (pendingFromOpp) {
     const newS = s.pending_stake;
     msgEl.innerHTML = `<span class="hl">${them.name}</span> raises the stake to <span class="hl">${newS}</span>. Accept, decline, or counter.`;
@@ -44,18 +38,13 @@ window.renderActions = function(s) {
     return;
   }
 
-  // I raised — waiting for opponent's response
   if (pendingFromMe) {
     msgEl.innerHTML = `You offered to raise to <span class="hl">${s.pending_stake}</span>. Waiting for ${them.name}…`;
-    // No buttons — must wait
     return;
   }
 
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // TERMINAL / TRANSITION PHASES
-  // ══════════════════════════════════════════════════════════════════════════
-
+  // ── Terminal phases ───────────────────────────────────────────────────────
   if (s.phase === 'waiting') {
     msgEl.textContent = 'Ready to start.';
     btnsEl.innerHTML  = `<button class="btn btn-gold" onclick="doStartRound()">Deal Cards</button>`;
@@ -70,22 +59,29 @@ window.renderActions = function(s) {
   }
 
   if (s.phase === 'round_over') {
-    msgEl.textContent = 'Round over.';
-    btnsEl.innerHTML  = `<button class="btn btn-gold" onclick="doStartRound()">Next Round →</button>`;
+    // In HvH only host starts the next round; guest sees a waiting message.
+    if (State.gameMode === 'hvh' && myPlayerIdx !== 0) {
+      msgEl.textContent = 'Round over — waiting for host to start next round…';
+    } else {
+      msgEl.textContent = 'Round over.';
+      btnsEl.innerHTML  = `<button class="btn btn-gold" onclick="doStartRound()">Next Round →</button>`;
+    }
     return;
   }
 
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // ACTIVE PHASES — raise button always shown as last button when available
-  // ══════════════════════════════════════════════════════════════════════════
-
-  // ── Stakes (before first card is played) ──────────────────────────────────
+  // ── Stakes ────────────────────────────────────────────────────────────────
   if (s.phase === 'stakes') {
+    // In HvH, only the active player acts during stakes; the other waits.
+    if (State.gameMode === 'hvh' && !iAmActive) {
+      msgEl.innerHTML = `Waiting for <span class="hl">${them.name}</span> to play…`;
+      return;
+    }
     msgEl.innerHTML = `<span class="stake-info">Stake <span class="sv">${s.current_stake}</span></span> Select cards to play — or raise the stake.`;
     _renderPlayAndRaise(btnsEl, sel, canRaise, s);
     return;
   }
+
 
   // ── Playing — my turn ─────────────────────────────────────────────────────
   if (s.phase === 'playing' && iAmActive) {
@@ -104,15 +100,21 @@ window.renderActions = function(s) {
   // ── Playing — opponent's turn ─────────────────────────────────────────────
   if (s.phase === 'playing' && !iAmActive) {
     msgEl.innerHTML = `<span class="hl">${them.name}</span> is playing…`;
-    if (canRaise) _renderRaiseOnly(btnsEl, s);
+    // No raise button — raising is only allowed before cards are played (stakes phase)
     return;
   }
 
-  // ── Cutting — I must respond ──────────────────────────────────────────────
-  if ((s.phase === 'cutting' || s.phase === 'forced_cut') && !iAmPlaying) {
-    const n        = s.played_cards?.length || 0;
-    const isForced = s.phase === 'forced_cut';
-    const canCut   = sel === n;
+
+  // ── Cutting — I must respond (I am NOT the one who played) ───────────────
+  if ((s.phase === 'cutting' || s.phase === 'forced_cut') && iAmCutter) {
+    const n          = s.played_cards?.length || 0;
+    const isForced   = s.phase === 'forced_cut';
+    // Cut: exactly n cards, all same suit
+    const selCards   = State.selectedCards.map(id => (me.hand||[]).find(c => c.id === id)).filter(Boolean);
+    const allSameSuit = selCards.length > 0 && selCards.every(c => c.suit === selCards[0].suit);
+    const canCut     = sel === n && allSameSuit;
+    // Pass: exactly n cards, any suit
+    const canPass    = sel === n;
     const canCounter = isCounterSelection();
 
     if (isForced) {
@@ -129,8 +131,8 @@ window.renderActions = function(s) {
         <button class="btn btn-green" id="btn-counter" onclick="doCounterPlay()" ${!canCounter ? 'disabled' : ''}>
           ⚡ Counter (3)
         </button>` : ''}
-      <button class="btn btn-ghost" id="btn-pass" onclick="doPassAuto(${n})" ${sel !== n ? 'disabled' : ''}>
-        ${sel === n ? `Pass selected` : `Pass (select ${n})`}
+      <button class="btn btn-ghost" id="btn-pass" onclick="doPassAuto(${n})" ${!canPass ? 'disabled' : ''}>
+        ${canPass ? `Pass selected` : `Pass (select ${n})`}
       </button>
       ${sel > 0 ? `<button class="btn btn-ghost btn-sm" onclick="clearSel()">Clear</button>` : ''}
     `;
@@ -142,25 +144,22 @@ window.renderActions = function(s) {
            Valid cuts: <span style="color:var(--gold)">${hint}</span>
          </div>`);
     }
-
-    if (canRaise) _renderRaiseOnly(btnsEl, s);
+    // No raise button here — raising only allowed during stakes phase
     return;
   }
 
-  // ── Cutting — I played, waiting ───────────────────────────────────────────
+  // ── Cutting — I played, waiting for opponent ──────────────────────────────
   if ((s.phase === 'cutting' || s.phase === 'forced_cut') && iAmPlaying) {
     const label = s.phase === 'forced_cut' ? '⚡ Maliutka! ' : '';
     msgEl.innerHTML = `${label}Waiting for <span class="hl">${them.name}</span> to respond…`;
-    if (canRaise) _renderRaiseOnly(btnsEl, s);
+    // No raise button — raising is only allowed during stakes phase
     return;
   }
 
   // ── Calculating — my right ────────────────────────────────────────────────
   if (s.phase === 'calculating' && iAmCalc) {
-    const known       = me.known_pile_points;
-    const hc          = me.hidden_card_count;
-    // Must calculate if deck is empty AND someone has fewer than 3 cards
-    // (if both have 3, play can still continue even with empty deck)
+    const known   = me.known_pile_points;
+    const hc      = me.hidden_card_count;
     const mustCalc = s.deck.size === 0
       && (s.players[0].hand_count < 3 || s.players[1].hand_count < 3);
     msgEl.innerHTML = `You may calculate! Known: <span class="hl">${known} pts</span> + ${hc} hidden (${me.hidden_min_points}–${me.hidden_max_points}). <em style="color:var(--text-dim);font-size:.85em;">💡 for estimate.</em>`
@@ -181,10 +180,7 @@ window.renderActions = function(s) {
 
 
 // ─── Button helpers ───────────────────────────────────────────────────────────
-// All stake buttons are always in the same position: after the primary action
-// buttons. Raise is always the LAST button so it never shifts other buttons.
 
-/** Play button + optional Clear, then Raise as last button. */
 function _renderPlayAndRaise(btnsEl, sel, canRaise, s) {
   const playBtn = document.createElement('button');
   playBtn.className   = 'btn btn-gold';
@@ -205,7 +201,6 @@ function _renderPlayAndRaise(btnsEl, sel, canRaise, s) {
   if (canRaise) _renderRaiseOnly(btnsEl, s);
 }
 
-/** Just the raise button — appended last so position never jumps. */
 function _renderRaiseOnly(btnsEl, s) {
   const btn = document.createElement('button');
   btn.className   = 'btn btn-ghost btn-sm';

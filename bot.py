@@ -1,9 +1,10 @@
 """
-bot.py — Bot AI implementations
-─────────────────────────────────
-Contains all bot classes. Each is a subclass of BotPlayer.
+bot.py — Bot implementations
+─────────────────────────────
+Contains all bot classes. Each subclasses BotPlayer from game_engine.py.
 
-To write a new bot:
+To write a new bot, subclass BotPlayer:
+
     class MyBot(BotPlayer):
         def choose_play(self, engine): ...
         def choose_cut_or_pass(self, engine): ...
@@ -13,7 +14,8 @@ To write a new bot:
 Then register it in BOT_REGISTRY at the bottom of this file.
 """
 
-from game_engine import BotPlayer, GameEngine, Rank, Suit, POINT_VALUES
+from game_engine import BotPlayer, GameEngine, Rank, Suit
+from itertools import combinations
 
 
 # ─── SimpleBot ────────────────────────────────────────────────────────────────
@@ -26,6 +28,8 @@ class SimpleBot(BotPlayer):
     - Cuts with minimum-value valid combo
     - Calculates only when guaranteed 31+
     """
+
+    DISPLAY_NAME = "Simple (Conservative)"
 
     def choose_play(self, engine: GameEngine) -> list[str]:
         hand  = self.hand
@@ -83,50 +87,58 @@ class SimpleBot(BotPlayer):
 class AggressiveBot(BotPlayer):
     """
     Aggressive bot strategy:
-    - Raises stakes early and often (when holding strong cards)
-    - Plays trump cards offensively to force passes
-    - Calculates at a lower threshold (takes risks)
-    - Cuts with the strongest combo to dominate
-    - Plays multiple cards (maliutka attempts) when possible
+    - Raises stakes when hand looks strong
+    - Plays trump early to apply pressure
+    - Tries counter-plays more often
+    - Calculates at a lower threshold (risk-taking)
+    - Cuts with highest-value combo to deny opponent points
     """
 
+    DISPLAY_NAME = "Aggressive (Risk-taker)"
+
     def _hand_strength(self, engine: GameEngine) -> float:
-        """Score the hand: trump cards and high-point cards are strong."""
+        """Score hand 0–1 based on trump count and high cards."""
         trump = engine.trump_suit
-        total = 0
+        score = 0
         for c in self.hand:
-            val = c.points
+            pts = c.points
             if c.suit == trump:
-                val *= 2.0   # trumps are worth double in aggression calc
-            total += val
-        return total
+                score += pts * 1.5
+            else:
+                score += pts
+        max_possible = 3 * 11 * 1.5  # 3 trump aces
+        return score / max_possible
 
     def choose_play(self, engine: GameEngine) -> list[str]:
         hand  = self.hand
         trump = engine.trump_suit
 
-        # Always play all 3 trumps for instant win
+        # Always play 3 trumps if possible
         trumps = [c for c in hand if c.suit == trump]
         if len(trumps) == 3:
             return [repr(c) for c in trumps]
 
-        # Try to set up a maliutka: 3 non-trump same-suit cards
-        from itertools import combinations
-        for suit in set(c.suit for c in hand):
-            if suit == trump:
-                continue
-            suit_cards = [c for c in hand if c.suit == suit]
-            if len(suit_cards) >= 3:
-                # Play highest 3 of this suit to maximise forcing power
-                best3 = sorted(suit_cards, key=lambda c: c.points, reverse=True)[:3]
-                return [repr(c) for c in best3]
+        # If we have 2+ trumps, play the lowest trump to drain opponent
+        if len(trumps) >= 2:
+            cheapest_trump = min(trumps, key=lambda c: c.points)
+            return [repr(cheapest_trump)]
 
-        # Play highest trump to force a difficult cut
-        if trumps:
-            best_trump = max(trumps, key=lambda c: c.points)
-            return [repr(best_trump)]
+        # Try to play 3 same-suit non-trump (maliutka attack)
+        non_trump = [c for c in hand if c.suit != trump]
+        suits = {}
+        for c in non_trump:
+            suits.setdefault(c.suit, []).append(c)
+        for suit, cards in suits.items():
+            if len(cards) == 3:
+                # Play maliutka — all 3
+                return [repr(c) for c in cards]
 
-        # Fallback: play highest card overall
+        # Play highest non-trump to maximize points
+        if non_trump:
+            best = max(non_trump, key=lambda c: c.points)
+            return [repr(best)]
+
+        # Only trump left — play highest to force opponent to use resources
         best = max(hand, key=lambda c: c.points)
         return [repr(best)]
 
@@ -135,7 +147,7 @@ class AggressiveBot(BotPlayer):
         valid  = engine.get_valid_cuts(my_idx)
 
         if valid:
-            # Cut with the strongest combo — dominate, not conserve
+            # Cut with HIGHEST value combo — deny opponent the points
             def combo_value(combo):
                 return sum(
                     next(c for c in self.hand if repr(c) == cid).points
@@ -143,6 +155,19 @@ class AggressiveBot(BotPlayer):
                 )
             best = max(valid, key=combo_value)
             return ("cut", best)
+
+        # Check for counter-play opportunity (3 non-trump same suit)
+        if engine.phase != GamePhase.FORCED_CUT:
+            trump = engine.trump_suit
+            non_trump = [c for c in self.hand if c.suit != trump]
+            suits = {}
+            for c in non_trump:
+                suits.setdefault(c.suit, []).append(c)
+            for suit, cards in suits.items():
+                if len(cards) >= 3:
+                    # Use highest 3 of this suit as counter
+                    top3 = sorted(cards, key=lambda c: c.points, reverse=True)[:3]
+                    return ("counter", [repr(c) for c in top3])
 
         # Cannot cut — pass cheapest cards
         n        = len(engine.played_cards)
@@ -152,30 +177,36 @@ class AggressiveBot(BotPlayer):
         return ("pass", [repr(c) for c in cheapest])
 
     def choose_calculate(self, engine: GameEngine) -> bool:
-        # Must calculate if deck is empty and someone has fewer than 3 cards
         if len(engine.deck) == 0:
             if any(len(p.hand) < 3 for p in engine.players):
                 return True
-
         known     = self.known_pile_points
         hc        = self.hidden_card_count
-        # Aggressive: calculate if there's a reasonable chance of winning
-        # Uses midpoint estimate rather than minimum
-        mid_total = known + hc * 6   # midpoint between J(2) and A(11)
-        return mid_total >= 31
+        # Aggressive: calculate if there's a reasonable chance (not guaranteed)
+        expected  = known + hc * 6   # assume average hidden card value ~6
+        return expected >= 31
 
     def choose_raise_stake(self, engine: GameEngine) -> bool:
-        # Raise if hand is strong and stake is not already high
-        if engine.current_stake >= 4:
-            return False
-        strength = self._hand_strength(engine)
-        return strength >= 28   # two high trumps or three high non-trumps
+        # Raise if hand is above 60% strength
+        return self._hand_strength(engine) >= 0.60
 
 
-# ─── Bot registry ─────────────────────────────────────────────────────────────
-# Maps display name → class. Add new bots here to make them available everywhere.
+# ─── Bot Registry ─────────────────────────────────────────────────────────────
+# Add new bot classes here. The key is the bot's identifier used in API calls.
 
 BOT_REGISTRY: dict[str, type] = {
-    "SimpleBot":     SimpleBot,
-    "AggressiveBot": AggressiveBot,
+    "simple":     SimpleBot,
+    "aggressive": AggressiveBot,
 }
+
+def get_bot(bot_id: str, player_id: str, name: str) -> BotPlayer:
+    """Instantiate a bot by registry key."""
+    cls = BOT_REGISTRY.get(bot_id, SimpleBot)
+    return cls(player_id, name)
+
+def list_bots() -> list[dict]:
+    """Return bot list for the frontend dropdown."""
+    return [
+        {"id": k, "name": getattr(v, "DISPLAY_NAME", k)}
+        for k, v in BOT_REGISTRY.items()
+    ]

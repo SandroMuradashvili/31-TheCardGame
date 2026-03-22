@@ -24,29 +24,31 @@ def bot_act_if_needed(engine: GameEngine, max_iter: int = 30):
         if phase in (GamePhase.GAME_OVER, GamePhase.ROUND_OVER, GamePhase.WAITING):
             break
 
-        # ── Pending stake offer — handle at any phase ─────────────────────────
-        # Human can raise stakes mid-round (during playing/cutting too).
-        # If the human raised, the bot must respond before anything else.
+        # ── Pending stake offer ───────────────────────────────────────────────
         if engine.stake_offerer_idx is not None and engine.stake_offerer_idx != bot_idx:
             if engine.pending_stake <= 3:
                 engine.accept_stake(bot_idx)
             else:
                 engine.decline_stake(bot_idx)
-            continue  # re-check phase after responding
+            continue
 
         # ── Stakes ───────────────────────────────────────────────────────────
         if phase == GamePhase.STAKES:
             if engine.stake_offerer_idx is None and engine.active_idx == bot_idx:
-                # Bot goes first — transition to playing and continue loop so
-                # bot immediately plays its card in the next iteration
+                # Check if bot wants to raise before playing
+                if (hasattr(bot, 'choose_raise_stake')
+                        and bot.choose_raise_stake(engine)
+                        and engine.can_raise_stake(bot_idx)):
+                    engine.offer_stake(bot_idx)
+                    continue
                 engine.start_play()
             else:
-                break  # Human's turn to act on stakes
+                break
 
         # ── Playing ──────────────────────────────────────────────────────────
         elif phase == GamePhase.PLAYING:
             if engine.active_idx != bot_idx:
-                break  # Human's turn
+                break
             engine.play_cards(bot_idx, bot.choose_play(engine))
 
         # ── Cutting / Forced cut ─────────────────────────────────────────────
@@ -54,7 +56,14 @@ def bot_act_if_needed(engine: GameEngine, max_iter: int = 30):
             if engine.playing_player_idx == bot_idx:
                 break  # Human needs to cut or pass
             action, card_ids = bot.choose_cut_or_pass(engine)
-            if action == "cut":
+            if action == "counter" and phase == GamePhase.CUTTING:
+                result = engine.counter_play(bot_idx, card_ids)
+                if not result:
+                    # Counter failed — fall back to cheapest pass
+                    n = len(engine.played_cards)
+                    cheapest = sorted(bot.hand, key=lambda c: c.points)[:n]
+                    engine.pass_cards(bot_idx, [repr(c) for c in cheapest])
+            elif action == "cut":
                 engine.cut_cards(bot_idx, card_ids)
             else:
                 engine.pass_cards(bot_idx, card_ids)
@@ -62,7 +71,7 @@ def bot_act_if_needed(engine: GameEngine, max_iter: int = 30):
         # ── Calculating ──────────────────────────────────────────────────────
         elif phase == GamePhase.CALCULATING:
             if engine.calculator_idx != bot_idx:
-                break  # Human has calculate right
+                break
             if bot.choose_calculate(engine):
                 engine.calculate(bot_idx)
             else:

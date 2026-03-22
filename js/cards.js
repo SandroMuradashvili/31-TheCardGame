@@ -2,9 +2,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // cards.js — Card HTML builder, selection logic, buzz effect
 // ─────────────────────────────────────────────────────────────────────────────
-// Depends on: state.js, utils.js (toast), animations.js (flyCard, getDeckRect)
-// ─────────────────────────────────────────────────────────────────────────────
-
 
 // ─── Card HTML ────────────────────────────────────────────────────────────────
 
@@ -34,7 +31,6 @@ window.buildTrumpCard = function(card) {
   </div>`;
 };
 
-
 // ─── Selection permission ─────────────────────────────────────────────────────
 
 window.canSelectCards = function(s) {
@@ -42,23 +38,20 @@ window.canSelectCards = function(s) {
   const { myPlayerIdx } = State;
   const phase = s.phase;
 
-  // If opponent raised mid-round and we haven't responded, lock card selection
-  const pendingFromOpp = s.stake_offerer_idx != null
-                      && s.stake_offerer_idx !== myPlayerIdx;
-  if (pendingFromOpp) return false;
+  // Never allow selection while a stake offer is pending (either direction)
+  if (s.stake_offerer_idx != null) return false;
 
-  // If we raised and are waiting for response, lock card selection
-  const pendingFromMe = s.stake_offerer_idx != null
-                     && s.stake_offerer_idx === myPlayerIdx;
-  if (pendingFromMe) return false;
+  // Stakes phase: only the active player selects cards
+  if (phase === 'stakes') return s.active_player_idx === myPlayerIdx;
 
-  if (phase === 'stakes')   return true;
+  // Playing: only on my turn
+  if (phase === 'playing') return s.active_player_idx === myPlayerIdx;
 
-  if (phase === 'playing' && s.active_player_idx === myPlayerIdx) return true;
+  // Cutting/forced-cut: only the defender (not the one who played)
+  if (phase === 'cutting' || phase === 'forced_cut')
+    return s.playing_player_idx !== myPlayerIdx;
 
-  if ((phase === 'cutting' || phase === 'forced_cut')
-      && s.playing_player_idx !== myPlayerIdx) return true;
-
+  // Pass mode overrides everything
   if (State.passModeActive) return true;
 
   return false;
@@ -83,7 +76,6 @@ window.isCounterSelection = function() {
   return selCards.every(c => c.suit === suit) && suit !== s.trump_suit;
 };
 
-
 // ─── Card selection ───────────────────────────────────────────────────────────
 
 window.toggleCard = function(cardId) {
@@ -99,38 +91,54 @@ window.toggleCard = function(cardId) {
     return;
   }
 
-  // ── Pass mode ─────────────────────────────────────────────────────────────
+  // ── Pass mode — any cards, any suit, exactly passCount ───────────────────
   if (State.passModeActive) {
     if (State.selectedCards.length >= State.passCount) State.selectedCards.shift();
     State.selectedCards.push(cardId);
 
-  // ── Cutting / forced-cut ──────────────────────────────────────────────────
-  // In normal cutting: allow up to 3 cards of the same suit so the player can
-  // build a counter-play (3 non-trump same suit) as well as a standard cut.
-  // In forced-cut (maliutka): only allow exact count, no counter option.
+  // ── Cutting / forced-cut ─────────────────────────────────────────────────
   } else if (s.phase === 'cutting' || s.phase === 'forced_cut') {
     const maxCut = s.played_cards?.length || 1;
-    const max    = s.phase === 'cutting' ? 3 : maxCut;
+    // In normal cutting: allow up to 3 cards (for counter-play option)
+    // In forced-cut: allow up to n cards (exact count for cut or pass)
+    const max = s.phase === 'cutting' ? 3 : maxCut;
 
     if (State.selectedCards.length >= max) {
       buzzCard(cardId);
-      toast('Clear your selection first, or click Cut / Counter / Pass', 'error', 2500);
+      toast('Clear your selection first', 'error', 2000);
       return;
     }
 
-    // All selected cards must be the same suit
-    const lockedSuit = getSelectedSuit();
-    if (lockedSuit) {
-      const card = s.players[State.myPlayerIdx].hand.find(c => c.id === cardId);
-      if (card && card.suit !== lockedSuit) {
-        buzzCard(cardId);
-        toast('All selected cards must be the same suit', 'error', 2000);
-        return;
+    // Suit lock only applies when we have 2+ cards already selected AND
+    // all selected so far are the same suit (i.e. player is building a cut/counter).
+    // If mixed suits are already selected, allow adding more (player is building a pass).
+    const hand = s.players[State.myPlayerIdx].hand || [];
+    if (State.selectedCards.length > 0) {
+      const selCards  = State.selectedCards.map(id => hand.find(c => c.id === id)).filter(Boolean);
+      const allSame   = selCards.every(c => c.suit === selCards[0].suit);
+      const newCard   = hand.find(c => c.id === cardId);
+      const sameAsAll = newCard && newCard.suit === selCards[0].suit;
+
+      // Only enforce suit lock if:
+      // - all current selections are same suit AND
+      // - we're not yet at the pass count (still possibly building a cut/counter)
+      // Once player deliberately picks a different suit, they're passing — allow it
+      if (allSame && State.selectedCards.length < maxCut && !sameAsAll) {
+        // They're switching suits — that means they want to pass with mixed cards.
+        // Allow it (pass validates count only, not suit).
       }
+      // No restriction — let them pick any card
     }
     State.selectedCards.push(cardId);
 
-  // ── Playing / stakes: up to 3 same-suit cards ─────────────────────────────
+  // ── Passing (doPassAuto path — inline pass without pass mode) ─────────────
+  // When phase is cutting and we are selecting cards to pass inline,
+  // we need exactly n cards but any suit is allowed.
+  // However, doPassAuto is triggered directly so we don't reach here for pass.
+  // The cutting block above handles the suit lock — but if somehow we need
+  // to relax this for pass, it's handled by passModeActive above.
+
+  // ── Playing / stakes — up to 3 same-suit cards ───────────────────────────
   } else {
     const lockedSuit = getSelectedSuit();
     if (lockedSuit) {
@@ -179,8 +187,11 @@ window.updateActionButtons = function() {
 
   const cutBtn = document.getElementById('btn-cut');
   if (cutBtn) {
-    const n            = s.played_cards?.length || 0;
-    cutBtn.disabled    = sel !== n;
+    const n       = s.played_cards?.length || 0;
+    const hand    = s.players[State.myPlayerIdx].hand || [];
+    const selC    = State.selectedCards.map(id => hand.find(c => c.id === id)).filter(Boolean);
+    const sameSuit = selC.length > 0 && selC.every(c => c.suit === selC[0].suit);
+    cutBtn.disabled    = sel !== n || !sameSuit;
     cutBtn.textContent = sel > 0 ? `Cut with ${sel}` : 'Cut…';
   }
 

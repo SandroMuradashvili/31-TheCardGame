@@ -1,16 +1,14 @@
 """
 sim_runner.py — Mass simulation runner
-────────────────────────────────────────
-Runs bot-vs-bot matches in background threads.
-The browser polls /api/sim/status/<sim_id> for progress.
+───────────────────────────────────────
+Runs bot-vs-bot simulations in background threads.
+Browser polls /api/sim/status/<sim_id> for progress.
 
-Each "simulation" is a set of matchups (unique bot pairs).
-Each matchup runs N games, collecting statistics after every game.
-
-Thread safety:
-  - Each Simulation object is only written by its own thread(s).
-  - The main Flask thread only reads .status / .results (safe for small dicts).
-  - We use one thread per matchup so matchups run in parallel.
+Each simulation:
+  - Has a unique sim_id
+  - Runs N matchups (bot pairs) in parallel threads
+  - Each matchup plays M games
+  - Tracks detailed statistics per matchup and per bot
 
 Depends on: game_engine.py, bot.py
 Imported by: server.py
@@ -20,360 +18,336 @@ import threading
 import time
 import uuid
 from itertools import combinations
-from typing import Optional
+from collections import defaultdict
 
-from game_engine import GameEngine, GamePhase
-from bot import BOT_REGISTRY, BotPlayer
-
-
-# ─── In-memory store ──────────────────────────────────────────────────────────
-
-simulations: dict[str, "Simulation"] = {}
+from game_engine import GameEngine, GamePhase, RoundEndReason
+from bot import get_bot, BOT_REGISTRY
 
 
-# ─── Statistics helpers ───────────────────────────────────────────────────────
+# ─── In-memory simulation store ───────────────────────────────────────────────
 
-def _empty_bot_stats() -> dict:
-    return {
-        "games":              0,
-        "wins":               0,
-        "rounds_played":      0,
-        "total_stake":        0,
-        "stake_raises":       0,
-        "stake_declines":     0,
-        "stake_accepts":      0,
-        "calculate_attempts": 0,
-        "calculate_wins":     0,
-        "calculate_losses":   0,
-        "three_trumps":       0,
-        "cuts":               0,
-        "passes":             0,
-        "counter_plays":      0,
-        "points_at_calculate": [],   # list of totals for avg
-        "round_end_reasons":  {},
-    }
+simulations: dict[str, dict] = {}
 
 
-def _merge_stats(a: dict, b: dict) -> dict:
-    """Merge b into a (for aggregate cross-matchup stats). Returns new dict."""
-    result = dict(a)
-    for k, v in b.items():
-        if k == "points_at_calculate":
-            result[k] = result.get(k, []) + v
-        elif k == "round_end_reasons":
-            d = dict(result.get(k, {}))
-            for reason, cnt in v.items():
-                d[reason] = d.get(reason, 0) + cnt
-            result[k] = d
-        elif isinstance(v, (int, float)):
-            result[k] = result.get(k, 0) + v
-        else:
-            result[k] = v
-    return result
+# ─── Statistics accumulator ───────────────────────────────────────────────────
 
+class MatchStats:
+    """Accumulates statistics for one bot-vs-bot matchup over many games."""
 
-def _finalise_stats(s: dict) -> dict:
-    """Add derived fields (rates, averages) to a raw stats dict."""
-    games   = max(s["games"], 1)
-    rounds  = max(s["rounds_played"], 1)
-    calcs   = max(s["calculate_attempts"], 1)
-    out = dict(s)
-    out["win_rate"]              = round(s["wins"] / games * 100, 2)
-    out["avg_rounds_per_game"]   = round(s["rounds_played"] / games, 2)
-    out["avg_stake"]             = round(s["total_stake"] / rounds, 2)
-    out["stake_raise_rate"]      = round(s["stake_raises"] / rounds * 100, 2)
-    out["calculate_success_rate"]= round(s["calculate_wins"] / calcs * 100, 2)
-    out["cut_rate"]              = round(s["cuts"] / max(s["cuts"]+s["passes"],1)*100, 2)
-    out["pass_rate"]             = round(s["passes"] / max(s["cuts"]+s["passes"],1)*100, 2)
-    out["avg_points_at_calculate"]= (
-        round(sum(s["points_at_calculate"]) / len(s["points_at_calculate"]), 2)
-        if s["points_at_calculate"] else 0
-    )
-    # remove raw list for JSON cleanliness
-    out.pop("points_at_calculate", None)
-    return out
+    def __init__(self, bot_a_id: str, bot_b_id: str):
+        self.bot_a_id = bot_a_id
+        self.bot_b_id = bot_b_id
+        self.games_played   = 0
+        self.wins           = [0, 0]       # wins[0]=botA wins, wins[1]=botB wins
+        self.total_rounds   = 0
+        self.total_stake    = 0
+        self.stake_samples  = 0
+
+        # Per-bot action counts [botA, botB]
+        self.raises         = [0, 0]
+        self.declines       = [0, 0]
+        self.accepts        = [0, 0]
+        self.cuts           = [0, 0]
+        self.passes         = [0, 0]
+        self.counters       = [0, 0]
+        self.calculates     = [0, 0]
+        self.calc_wins      = [0, 0]   # calculated and had 31+
+        self.calc_losses    = [0, 0]   # calculated but < 31
+        self.three_trumps   = [0, 0]
+        self.stake_declines_received = [0, 0]  # opponent declined my raise
+
+        # Points at calculate
+        self.calc_points_sum = [0, 0]
+        self.calc_attempts   = [0, 0]
+
+    def record_game(self, game_history: list[dict], winner_idx: int,
+                    player_ids: list[str], rounds: int, final_stake: int):
+        self.games_played += 1
+        self.wins[winner_idx] += 1
+        self.total_rounds += rounds
+        self.total_stake  += final_stake
+        self.stake_samples += 1
+
+        pid = {player_ids[0]: 0, player_ids[1]: 1}
+
+        for move in game_history:
+            p = pid.get(move.get("player"), -1)
+            if p == -1:
+                continue
+            t = move.get("type")
+            d = move.get("data", {})
+
+            if t == "stake_offer":
+                self.raises[p] += 1
+            elif t == "stake_accept":
+                self.accepts[p] += 1
+            elif t == "stake_decline":
+                self.declines[p] += 1
+                # The other player raised and got declined
+                raiser = pid.get(move.get("player"), -1)
+                # actually raiser is the offerer — tracked by stake_declines_received
+                opp = 1 - p
+                self.stake_declines_received[opp] += 1
+            elif t == "cut":
+                self.cuts[p] += 1
+            elif t == "pass":
+                self.passes[p] += 1
+            elif t == "counter_play":
+                self.counters[p] += 1
+            elif t == "three_trumps":
+                self.three_trumps[p] += 1
+            elif t == "calculate":
+                self.calculates[p] += 1
+                pts = d.get("total", 0)
+                won = d.get("win", False)
+                self.calc_points_sum[p] += pts
+                self.calc_attempts[p]   += 1
+                if won:
+                    self.calc_wins[p] += 1
+                else:
+                    self.calc_losses[p] += 1
+
+    def to_dict(self) -> dict:
+        g = max(self.games_played, 1)
+        r = max(self.total_rounds, 1)
+
+        def pct(num, denom):
+            return round(num / max(denom, 1) * 100, 1)
+
+        def per_game(val):
+            return round(val / g, 2)
+
+        def avg_pts(p):
+            return round(self.calc_points_sum[p] / max(self.calc_attempts[p], 1), 1)
+
+        result = {
+            "bot_a_id":    self.bot_a_id,
+            "bot_b_id":    self.bot_b_id,
+            "games_played": self.games_played,
+            "avg_rounds_per_game": round(self.total_rounds / g, 1),
+            "avg_stake":   round(self.total_stake / max(self.stake_samples, 1), 2),
+        }
+
+        for i, label in enumerate(["bot_a", "bot_b"]):
+            ca = max(self.calc_attempts[i], 1)
+            result[label] = {
+                "wins":              self.wins[i],
+                "win_rate":          pct(self.wins[i], g),
+                "raises_per_game":   per_game(self.raises[i]),
+                "declines_per_game": per_game(self.declines[i]),
+                "cuts_per_game":     per_game(self.cuts[i]),
+                "passes_per_game":   per_game(self.passes[i]),
+                "counters_per_game": per_game(self.counters[i]),
+                "three_trumps_per_game": per_game(self.three_trumps[i]),
+                "calc_attempts_per_game": per_game(self.calculates[i]),
+                "calc_success_rate": pct(self.calc_wins[i], ca),
+                "calc_bluff_rate":   pct(self.calc_losses[i], ca),
+                "avg_pts_at_calc":   avg_pts(i),
+            }
+
+        return result
 
 
 # ─── Single game runner ───────────────────────────────────────────────────────
 
-def _run_one_game(BotClassA: type, BotClassB: type,
-                  target_score: int, stats_a: dict, stats_b: dict):
-    """
-    Run one complete game between BotA and BotB.
-    Mutates stats_a and stats_b in place.
-    """
-    bot_a = BotClassA("a", BotClassA.__name__)
-    bot_b = BotClassB("b", BotClassB.__name__)
-    engine = GameEngine(bot_a, bot_b, target_score=target_score)
+def _run_one_game(bot_a_id: str, bot_b_id: str, target_score: int) -> dict:
+    """Run one complete game. Returns winner_idx, rounds, history."""
+    p1 = get_bot(bot_a_id, "p1", "BotA")
+    p2 = get_bot(bot_b_id, "p2", "BotB")
+    engine = GameEngine(p1, p2, target_score=target_score)
     engine.start_round()
 
-    max_iter = 5000
-    for _ in range(max_iter):
-        if engine.phase == GamePhase.GAME_OVER:
-            break
-        if engine.phase == GamePhase.ROUND_OVER:
+    max_rounds = 500
+    rounds = 0
+
+    while engine.phase != GamePhase.GAME_OVER and rounds < max_rounds:
+        phase = engine.phase
+
+        if phase == GamePhase.ROUND_OVER:
             engine.start_round()
-            continue
-        if engine.phase == GamePhase.WAITING:
-            break
-        _step(engine)
-
-    # Tally results
-    stats_a["games"] += 1
-    stats_b["games"] += 1
-
-    winner_idx = None
-    for i, p in enumerate(engine.players):
-        if p.game_score >= engine.target_score:
-            winner_idx = i
-            break
-
-    if winner_idx == 0:
-        stats_a["wins"] += 1
-    elif winner_idx == 1:
-        stats_b["wins"] += 1
-
-    # Parse move history for detailed stats
-    for move in engine.move_history:
-        pid  = move.player_id
-        mtype = move.move_type
-        data = move.data
-        s = stats_a if pid == "a" else stats_b if pid == "b" else None
-
-        if mtype == "round_start":
-            stats_a["rounds_played"] += 1
-            stats_b["rounds_played"] += 1
-
-        if mtype == "round_end" and s is None:
-            reason = data.get("reason", "unknown")
-            stake  = data.get("stake", 1)
-            w_id   = data.get("winner")
-            ws = stats_a if w_id == "a" else stats_b if w_id == "b" else None
-            if ws:
-                ws["round_end_reasons"][reason] = ws["round_end_reasons"].get(reason, 0) + 1
-            stats_a["total_stake"] += stake
-            stats_b["total_stake"] += stake
-
-        if s is None:
+            rounds += 1
             continue
 
-        if mtype == "stake_offer":
-            s["stake_raises"] += 1
-        elif mtype == "stake_decline":
-            s["stake_declines"] += 1
-        elif mtype == "stake_accept":
-            s["stake_accepts"] += 1
-        elif mtype == "calculate":
-            s["calculate_attempts"] += 1
-            pts = data.get("total", 0)
-            s["points_at_calculate"].append(pts)
-            if data.get("win"):
-                s["calculate_wins"] += 1
+        if phase == GamePhase.WAITING:
+            break
+
+        # Handle pending stake
+        stake_handled = False
+        for idx, bot in enumerate(engine.players):
+            if (engine.stake_offerer_idx is not None
+                    and engine.stake_offerer_idx != idx):
+                if engine.pending_stake <= 3:
+                    engine.accept_stake(idx)
+                else:
+                    engine.decline_stake(idx)
+                stake_handled = True
+                break
+        if stake_handled:
+            continue
+
+        if phase == GamePhase.STAKES:
+            active = engine.active_idx
+            bot = engine.players[active]
+            # Check if bot wants to raise stake
+            if hasattr(bot, 'choose_raise_stake') and bot.choose_raise_stake(engine):
+                if engine.can_raise_stake(active):
+                    engine.offer_stake(active)
+                    continue
+            engine.start_play()
+
+        elif phase == GamePhase.PLAYING:
+            active = engine.active_idx
+            bot = engine.players[active]
+            engine.play_cards(active, bot.choose_play(engine))
+
+        elif phase in (GamePhase.CUTTING, GamePhase.FORCED_CUT):
+            cutter_idx = 1 - engine.playing_player_idx
+            bot = engine.players[cutter_idx]
+            action, card_ids = bot.choose_cut_or_pass(engine)
+            if action == "counter" and phase == GamePhase.CUTTING:
+                result = engine.counter_play(cutter_idx, card_ids)
+                if not result:
+                    # Counter failed — fall back to pass
+                    n = len(engine.played_cards)
+                    cheapest = sorted(bot.hand, key=lambda c: c.points)[:n]
+                    engine.pass_cards(cutter_idx, [repr(c) for c in cheapest])
+            elif action == "cut":
+                engine.cut_cards(cutter_idx, card_ids)
             else:
-                s["calculate_losses"] += 1
-        elif mtype == "three_trumps":
-            s["three_trumps"] += 1
-        elif mtype == "cut":
-            s["cuts"] += 1
-        elif mtype == "pass":
-            s["passes"] += 1
-        elif mtype == "counter_play":
-            s["counter_plays"] += 1
+                engine.pass_cards(cutter_idx, card_ids)
 
-
-def _step(engine: GameEngine):
-    """Execute one action in the engine (same logic as bvb_runner but inline)."""
-    phase = engine.phase
-    if phase in (GamePhase.GAME_OVER, GamePhase.WAITING, GamePhase.ROUND_OVER):
-        return
-
-    # Pending stake
-    for idx, bot in enumerate(engine.players):
-        if (engine.stake_offerer_idx is not None
-                and engine.stake_offerer_idx != idx):
-            if engine.pending_stake <= 3:
-                engine.accept_stake(idx)
+        elif phase == GamePhase.CALCULATING:
+            calc_idx = engine.calculator_idx
+            bot = engine.players[calc_idx]
+            if bot.choose_calculate(engine):
+                engine.calculate(calc_idx)
             else:
-                engine.decline_stake(idx)
-            return
+                engine.skip_calculate(calc_idx)
 
-    if phase == GamePhase.STAKES:
-        engine.start_play()
-    elif phase == GamePhase.PLAYING:
-        active = engine.active_idx
-        bot    = engine.players[active]
-        engine.play_cards(active, bot.choose_play(engine))
-    elif phase in (GamePhase.CUTTING, GamePhase.FORCED_CUT):
-        cutter_idx = 1 - engine.playing_player_idx
-        bot        = engine.players[cutter_idx]
-        action, card_ids = bot.choose_cut_or_pass(engine)
-        if action == "cut":
-            engine.cut_cards(cutter_idx, card_ids)
         else:
-            engine.pass_cards(cutter_idx, card_ids)
-    elif phase == GamePhase.CALCULATING:
-        calc_idx = engine.calculator_idx
-        bot      = engine.players[calc_idx]
-        if bot.choose_calculate(engine):
-            engine.calculate(calc_idx)
-        else:
-            engine.skip_calculate(calc_idx)
+            break
+
+    winner_idx = 0
+    if engine.round_winner_idx is not None:
+        winner_idx = engine.round_winner_idx
+    elif engine.players[1].game_score > engine.players[0].game_score:
+        winner_idx = 1
+
+    return {
+        "winner_idx":  winner_idx,
+        "rounds":      rounds,
+        "history":     [m.to_dict() for m in engine.move_history],
+        "final_stake": engine.current_stake,
+        "player_ids":  [p.player_id for p in engine.players],
+    }
 
 
-# ─── Matchup runner ───────────────────────────────────────────────────────────
+# ─── Matchup worker ───────────────────────────────────────────────────────────
 
-class Matchup:
-    def __init__(self, bot_a: str, bot_b: str, games: int, target_score: int):
-        self.bot_a        = bot_a
-        self.bot_b        = bot_b
-        self.games        = games
-        self.target_score = target_score
-        self.completed    = 0
-        self.stats_a      = _empty_bot_stats()
-        self.stats_b      = _empty_bot_stats()
-        self.done         = False
-        self.started_at   = None
-        self.finished_at  = None
+def _run_matchup(sim_id: str, matchup_idx: int,
+                 bot_a_id: str, bot_b_id: str,
+                 games: int, target_score: int):
+    """Worker thread for one bot-pair matchup."""
+    sim = simulations[sim_id]
+    stats = MatchStats(bot_a_id, bot_b_id)
 
-    def run(self):
-        self.started_at = time.time()
-        BotA = BOT_REGISTRY[self.bot_a]
-        BotB = BOT_REGISTRY[self.bot_b]
-        for _ in range(self.games):
-            _run_one_game(BotA, BotB, self.target_score, self.stats_a, self.stats_b)
-            self.completed += 1
-        self.done         = True
-        self.finished_at  = time.time()
+    for g in range(games):
+        if sim.get("cancelled"):
+            break
+        try:
+            result = _run_one_game(bot_a_id, bot_b_id, target_score)
+            stats.record_game(
+                result["history"],
+                result["winner_idx"],
+                result["player_ids"],
+                result["rounds"],
+                result["final_stake"],
+            )
+        except Exception as e:
+            pass  # Skip bad games silently
 
-    def progress(self) -> float:
-        return self.completed / max(self.games, 1)
+        # Update progress
+        sim["matchups"][matchup_idx]["games_done"] = g + 1
 
-    def elapsed(self) -> float:
-        if self.started_at is None:
-            return 0.0
-        end = self.finished_at or time.time()
-        return end - self.started_at
+    sim["matchups"][matchup_idx]["status"]  = "done"
+    sim["matchups"][matchup_idx]["results"] = stats.to_dict()
 
-    def eta(self) -> Optional[float]:
-        if not self.started_at or self.completed == 0:
-            return None
-        rate = self.completed / self.elapsed()
-        remaining = self.games - self.completed
-        return remaining / rate if rate > 0 else None
-
-    def to_status(self) -> dict:
-        return {
-            "bot_a":     self.bot_a,
-            "bot_b":     self.bot_b,
-            "games":     self.games,
-            "completed": self.completed,
-            "progress":  round(self.progress() * 100, 1),
-            "done":      self.done,
-            "elapsed":   round(self.elapsed(), 1),
-            "eta":       round(self.eta(), 1) if self.eta() is not None else None,
-            # live scores during run
-            "wins_a":    self.stats_a["wins"],
-            "wins_b":    self.stats_b["wins"],
-        }
-
-    def to_result(self) -> dict:
-        return {
-            "bot_a":   self.bot_a,
-            "bot_b":   self.bot_b,
-            "games":   self.games,
-            "elapsed": round(self.elapsed(), 1),
-            "stats_a": _finalise_stats(self.stats_a),
-            "stats_b": _finalise_stats(self.stats_b),
-        }
-
-
-# ─── Simulation (collection of matchups) ──────────────────────────────────────
-
-class Simulation:
-    def __init__(self, sim_id: str, matchups: list[Matchup]):
-        self.sim_id    = sim_id
-        self.matchups  = matchups
-        self.started_at = time.time()
-        self.threads: list[threading.Thread] = []
-
-    def start(self):
-        for m in self.matchups:
-            t = threading.Thread(target=m.run, daemon=True)
-            t.start()
-            self.threads.append(t)
-
-    @property
-    def done(self) -> bool:
-        return all(m.done for m in self.matchups)
-
-    def overall_progress(self) -> float:
-        total = sum(m.games for m in self.matchups)
-        done  = sum(m.completed for m in self.matchups)
-        return done / max(total, 1)
-
-    def max_eta(self) -> Optional[float]:
-        etas = [m.eta() for m in self.matchups if m.eta() is not None]
-        return max(etas) if etas else None
-
-    def to_status(self) -> dict:
-        return {
-            "sim_id":   self.sim_id,
-            "done":     self.done,
-            "progress": round(self.overall_progress() * 100, 1),
-            "eta":      round(self.max_eta(), 1) if self.max_eta() else None,
-            "matchups": [m.to_status() for m in self.matchups],
-        }
-
-    def to_result(self) -> dict:
-        # Per-matchup results
-        matchup_results = [m.to_result() for m in self.matchups]
-
-        # Aggregate per-bot across all matchups
-        bot_agg: dict[str, dict] = {}
-        for m in self.matchups:
-            for bot_name, raw in [(m.bot_a, m.stats_a), (m.bot_b, m.stats_b)]:
-                if bot_name not in bot_agg:
-                    bot_agg[bot_name] = _empty_bot_stats()
-                bot_agg[bot_name] = _merge_stats(bot_agg[bot_name], raw)
-
-        bot_summary = {name: _finalise_stats(s) for name, s in bot_agg.items()}
-
-        return {
-            "sim_id":       self.sim_id,
-            "matchups":     matchup_results,
-            "bot_summary":  bot_summary,
-            "elapsed":      round(time.time() - self.started_at, 1),
-        }
+    # Check if all matchups done
+    all_done = all(m["status"] == "done" for m in sim["matchups"])
+    if all_done:
+        sim["status"]   = "done"
+        sim["ended_at"] = time.time()
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 
-def create_simulation(bot_pairs: list[tuple[str, str]],
-                      games_per_matchup: int,
-                      target_score: int) -> str:
+def start_simulation(bot_ids: list[str], games_per_matchup: int,
+                     target_score: int = 7) -> str:
     """
-    Create and start a simulation.
-    bot_pairs: list of (bot_a_name, bot_b_name) tuples — no duplicates, no same-vs-same.
+    Start a round-robin simulation among the given bots.
     Returns sim_id.
     """
     sim_id   = str(uuid.uuid4())[:8]
-    matchups = [
-        Matchup(a, b, games_per_matchup, target_score)
-        for a, b in bot_pairs
-    ]
-    sim = Simulation(sim_id, matchups)
-    simulations[sim_id] = sim
-    sim.start()
+    pairs    = list(combinations(bot_ids, 2))
+    matchups = []
+
+    for i, (a, b) in enumerate(pairs):
+        matchups.append({
+            "idx":        i,
+            "bot_a_id":   a,
+            "bot_b_id":   b,
+            "games_total": games_per_matchup,
+            "games_done":  0,
+            "status":     "running",
+            "results":    None,
+        })
+
+    simulations[sim_id] = {
+        "sim_id":       sim_id,
+        "status":       "running",
+        "started_at":   time.time(),
+        "ended_at":     None,
+        "games_per_matchup": games_per_matchup,
+        "target_score": target_score,
+        "matchups":     matchups,
+        "cancelled":    False,
+    }
+
+    for i, (a, b) in enumerate(pairs):
+        t = threading.Thread(
+            target=_run_matchup,
+            args=(sim_id, i, a, b, games_per_matchup, target_score),
+            daemon=True,
+        )
+        t.start()
+
     return sim_id
 
 
-def get_simulation_status(sim_id: str) -> Optional[dict]:
+def get_sim_status(sim_id: str) -> dict | None:
     sim = simulations.get(sim_id)
-    return sim.to_status() if sim else None
-
-
-def get_simulation_result(sim_id: str) -> Optional[dict]:
-    sim = simulations.get(sim_id)
-    if sim is None:
+    if not sim:
         return None
-    return sim.to_result()
+
+    elapsed = time.time() - sim["started_at"]
+    total_games   = sum(m["games_total"] for m in sim["matchups"])
+    done_games    = sum(m["games_done"]  for m in sim["matchups"])
+    pct = done_games / max(total_games, 1)
+
+    eta = None
+    if pct > 0.01 and sim["status"] == "running":
+        eta = round((elapsed / pct) * (1 - pct))
+
+    return {
+        **sim,
+        "elapsed_seconds": round(elapsed),
+        "pct_done":        round(pct * 100, 1),
+        "eta_seconds":     eta,
+        "total_games":     total_games,
+        "done_games":      done_games,
+    }
+
+
+def cancel_simulation(sim_id: str):
+    if sim_id in simulations:
+        simulations[sim_id]["cancelled"] = True
