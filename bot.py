@@ -73,8 +73,15 @@ class SimpleBot(BotPlayer):
         return ("pass", [repr(c) for c in cheapest])
 
     def choose_calculate(self, engine: GameEngine) -> bool:
-        # Only calculate when the true total is already a guaranteed win
-        return self.pile_points >= 31
+        # Use only known_pile_points — the bot cannot see the value of cards
+        # passed by the opponent (hidden_pile), just like a human player.
+        # Also factor in the best-case hidden cards to decide if it's worth risking.
+        known   = self.known_pile_points
+        hc      = self.hidden_card_count
+        # Calculate only if even the minimum possible total (hidden cards = J=2 each)
+        # is already >= 31 — i.e. guaranteed win regardless of what was passed
+        min_total = known + hc * 2   # J is worth 2, the lowest card value
+        return min_total >= 31
 
     def choose_raise_stake(self, engine: GameEngine) -> bool:
         return False

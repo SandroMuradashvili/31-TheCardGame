@@ -62,7 +62,13 @@ window.doPlayCards = async function() {
   const step1 = await api(ROOM('play_only'), { player_idx: State.myPlayerIdx, cards });
   if (!step1?.state) return;
   logAction(`<span class="le-type">PLAY</span> You played ${cards.join(' ')}`);
-  _forceReRenderKeys();
+  // Snapshot current keys so remaining hand cards don't re-animate from deck
+  const s0 = State.gameState;
+  if (s0) {
+    State.prevHandKeys[0] = JSON.stringify((s0.players[0].hand || []).map(c => c.id || 'h'));
+    State.prevHandKeys[1] = JSON.stringify((s0.players[1].hand || []).map(c => c.id || 'h'));
+  }
+  State.prevPlayedKey = '';
   State.gameState = step1.state;
   render();
   setTimeout(_handleBotResponse, 400 + cards.length * 70);
@@ -98,14 +104,14 @@ async function _handleBotResponse() {
       return el;
     });
     logAction(`<span class="le-type">CUT</span> ${botState.players[botIdx].name} cut`);
-    _forceReRenderKeys();
+    _clearTableKey();
     animateCutSequence(cutEls, playedEls, botIdx, () => _forceRender(botState));
 
   } else if (botAction === 'pass') {
     const playedEls = Array.from(document.querySelectorAll('#played-row .table-card'));
     const passCount = lastBotMove.data?.passed_count || State.gameState.played_cards?.length || 1;
     logAction(`<span class="le-type">PASS</span> ${botState.players[botIdx].name} passed`);
-    _forceReRenderKeys();
+    _clearTableKey();
     animatePassSequence(passCount, botIdx, State.myPlayerIdx, playedEls, () => _forceRender(botState));
 
   } else {
@@ -128,6 +134,9 @@ window.doCutCards = async function() {
   if (!data?.state) return;
   logAction(`<span class="le-type">CUT</span> You cut with ${cards.join(' ')}`);
 
+  // Immediately remove the cut cards from the hand DOM
+  _removeCardsFromHandDOM(cutterIdx, cards);
+
   const row      = document.getElementById('played-row');
   const prevHand = State.gameState.players[cutterIdx].hand || [];
   const cutEls = cards.map(cardId => {
@@ -141,7 +150,7 @@ window.doCutCards = async function() {
     return el;
   });
 
-  _forceReRenderKeys();
+  _clearTableKey();
   animateCutSequence(cutEls, playedEls, cutterIdx, () => _forceRender(data.state));
 };
 
@@ -179,7 +188,7 @@ window.doCounterPlay = async function() {
     return el;
   });
 
-  _forceReRenderKeys();
+  _clearTableKey();
   animatePlayToTable(counterEls, cutterIdx, () => {
     if (State.gameMode === 'hvb') {
       setTimeout(_handleBotResponse, 200);
@@ -192,22 +201,13 @@ window.doCounterPlay = async function() {
 
 // ─── Passing ──────────────────────────────────────────────────────────────────
 
-// Auto-pass: if cards are selected uses them, otherwise picks cheapest non-trump
+// Pass using currently selected cards — requires exactly n cards selected
 window.doPassAuto = async function(n) {
-  const s = State.gameState;
-  if (!s) return;
-
-  let cards;
-  if (State.selectedCards.length === n) {
-    cards = [...State.selectedCards];
-  } else {
-    const hand     = s.players[State.myPlayerIdx].hand || [];
-    const sorted   = [...hand.filter(c => c.suit !== s.trump_suit).sort((a,b) => a.points - b.points),
-                      ...hand.filter(c => c.suit === s.trump_suit).sort((a,b) => a.points - b.points)];
-    cards = sorted.slice(0, n).map(c => c.id);
-    if (cards.length < n) { toast('Not enough cards to pass', 'error'); return; }
+  if (State.selectedCards.length !== n) {
+    toast(`Select exactly ${n} card${n > 1 ? 's' : ''} to pass`, 'error');
+    return;
   }
-
+  const cards = [...State.selectedCards];
   clearSel();
   await _executePass(cards);
 };
@@ -228,7 +228,12 @@ async function _executePass(cards) {
   const data = await api(ROOM('pass'), { player_idx: passerIdx, cards });
   if (!data?.state) return;
   logAction(`<span class="le-type">PASS</span> You passed ${playedCount} card${playedCount>1?'s':''}`);
-  _forceReRenderKeys();
+
+  // Immediately remove the passed cards from the hand DOM so the player
+  // doesn't see them sitting there while the animation plays.
+  _removeCardsFromHandDOM(passerIdx, cards);
+
+  _clearTableKey();
   animatePassSequence(playedCount, passerIdx, takerIdx, playedEls, () => _forceRender(data.state));
 }
 
@@ -245,7 +250,14 @@ window.doCalculate = async function() {
 
 window.doSkipCalc = async function() {
   clearSel();
-  _forceReRenderKeys();
+  // Snapshot current hand keys BEFORE the API call so renderHandCards
+  // can diff old vs new — only the drawn card(s) will animate from deck.
+  const s = State.gameState;
+  if (s) {
+    State.prevHandKeys[0] = JSON.stringify((s.players[0].hand || []).map(c => c.id || 'h'));
+    State.prevHandKeys[1] = JSON.stringify((s.players[1].hand || []).map(c => c.id || 'h'));
+  }
+  State.prevPlayedKey = '';
   const data = await api(ROOM('skip_calculate'), { player_idx: State.myPlayerIdx });
   if (!data?.state) return;
   State.gameState = data.state;
@@ -256,13 +268,54 @@ window.doSkipCalc = async function() {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function _forceReRenderKeys() {
-  State.prevHandKeys  = ['', ''];
+/** Clear the table key so renderTable re-renders, but KEEP hand keys intact.
+ *  This means renderHandCards will correctly diff old vs new hands and only
+ *  animate genuinely new cards (drawn from deck), not cards the player already had. */
+function _clearTableKey() {
   State.prevPlayedKey = '';
 }
 
+/** Instantly remove specific cards from the player's hand DOM.
+ *  Called before animations so the cards disappear immediately on action,
+ *  rather than sitting in the hand while the animation plays.
+ *  Also updates prevHandKeys so renderHandCards won't re-animate remaining cards. */
+function _removeCardsFromHandDOM(playerIdx, cardIds) {
+  const container = document.getElementById(`hand-${playerIdx}`);
+  if (!container) return;
+
+  cardIds.forEach(id => {
+    const el = container.querySelector(`.card[data-id="${id}"]`);
+    if (el) el.remove();
+  });
+
+  // Update prevHandKeys to reflect the hand minus the removed cards
+  // so the next render() call doesn't re-animate remaining cards from deck
+  const s = State.gameState;
+  if (s) {
+    const remaining = (s.players[playerIdx].hand || [])
+      .filter(c => !cardIds.includes(c.id))
+      .map(c => c.id || 'h');
+    State.prevHandKeys[playerIdx] = JSON.stringify(remaining);
+  }
+}
+
+/** Snapshot current hand keys so the next render knows what cards existed before. */
+function _snapshotHandKeys() {
+  State.players?.forEach?.((p, i) => {});  // no-op, keys already set by last render
+  // Keys are already up to date — just clear the table so it re-renders
+  _clearTableKey();
+}
+
+/** Apply new state and render. Hand keys are intentionally NOT wiped —
+ *  renderHandCards will diff and only animate cards that are genuinely new. */
 function _forceRender(newState) {
-  _forceReRenderKeys();
+  _clearTableKey();
   State.gameState = newState;
   render();
+}
+
+/** Used only when we need to force a full hand re-render (e.g. debug toggle). */
+function _forceReRenderKeys() {
+  State.prevHandKeys  = ['', ''];
+  State.prevPlayedKey = '';
 }

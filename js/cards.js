@@ -187,6 +187,13 @@ window.updateActionButtons = function() {
   const counterBtn = document.getElementById('btn-counter');
   if (counterBtn) counterBtn.disabled = !isCounterSelection();
 
+  const passBtn = document.getElementById('btn-pass');
+  if (passBtn) {
+    const n = State.gameState?.played_cards?.length || 0;
+    passBtn.disabled    = sel !== n;
+    passBtn.textContent = sel === n ? `Pass selected` : `Pass (select ${n})`;
+  }
+
   const passConfBtn = document.getElementById('btn-pass-confirm');
   if (passConfBtn) passConfBtn.disabled = sel !== State.passCount;
 };

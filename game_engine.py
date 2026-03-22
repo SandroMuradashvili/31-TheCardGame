@@ -244,6 +244,7 @@ class GameEngine:
         self.current_stake = 1
         self.pending_stake = 1
         self.stake_offerer_idx: Optional[int] = None
+        self.last_raiser_idx: Optional[int] = None  # who raised last — they cannot raise again until opponent raises
         self.active_idx: int = 0
         self.calculator_idx: Optional[int] = None
         self.played_cards: list[Card] = []
@@ -326,6 +327,7 @@ class GameEngine:
         self.current_stake = 1
         self.pending_stake = 1
         self.stake_offerer_idx = None
+        self.last_raiser_idx   = None
         self.played_cards = []
         self.playing_player_idx = None
         self.calculator_idx = None
@@ -396,6 +398,7 @@ class GameEngine:
         self.current_stake      = 1
         self.pending_stake      = 1
         self.stake_offerer_idx  = None
+        self.last_raiser_idx    = None
         self.played_cards       = []
         self.playing_player_idx = None
         self.calculator_idx     = None
@@ -445,15 +448,20 @@ class GameEngine:
     # ── Stakes ────────────────────────────────────────────────────────────────
 
     def can_raise_stake(self, player_idx: int) -> bool:
-        # Can raise at any point during the round EXCEPT:
-        # - round is over / not started
-        # - stake already at max (6)
-        # - you already raised and opponent hasn't responded yet
+        # Can raise ONLY if:
+        # - round is active
+        # - stake < 6
+        # - no pending offer from this player
+        # - this player was NOT the last one to raise (raises must strictly alternate)
         if self.phase in (GamePhase.WAITING, GamePhase.ROUND_OVER, GamePhase.GAME_OVER):
             return False
         if self.current_stake >= 6:
             return False
+        # Can't raise while your own offer is still pending
         if self.stake_offerer_idx is not None and self.stake_offerer_idx == player_idx:
+            return False
+        # Can't raise if you were the last raiser — must wait for opponent to raise first
+        if self.last_raiser_idx == player_idx:
             return False
         base = self.pending_stake if self.stake_offerer_idx is not None else self.current_stake
         return base + 1 <= 6
@@ -466,6 +474,7 @@ class GameEngine:
         base = self.pending_stake if self.stake_offerer_idx is not None else self.current_stake
         self.pending_stake     = base + 1
         self.stake_offerer_idx = player_idx
+        self.last_raiser_idx   = player_idx  # this player cannot raise again until opponent raises
         self._log("stake_offer", self.players[player_idx].player_id, {"stake": self.pending_stake})
         return True
 
