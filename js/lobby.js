@@ -10,7 +10,7 @@
 // ─── Tab switching ────────────────────────────────────────────────────────────
 
 window.switchTab = function(tab) {
-  ['hvb', 'create', 'join'].forEach(t => {
+  ['hvb', 'create', 'join', 'bvb'].forEach(t => {
     document.getElementById(`tab-${t}`).classList.toggle('active', t === tab);
     document.getElementById(`tab-${t}-content`).style.display = t === tab ? '' : 'none';
   });
@@ -106,6 +106,7 @@ window.showLobby = function() {
   State.gameState     = null;
   State.selectedCards = [];
   State.modalShown    = false;
+  State.bvbRunning    = false;
 };
 
 
@@ -138,6 +139,112 @@ window.stopPolling = function() {
 };
 
 
+// ─── Bot vs Bot ──────────────────────────────────────────────────────────────
+
+window.startBvB = async function() {
+  const target = document.getElementById('lb-target-bvb').value;
+  const speed  = document.getElementById('lb-bvb-speed').value;
+
+  const data = await api('/api/create_bvb', { target_score: target });
+  if (!data) return;
+
+  State.roomId      = data.room_id;
+  State.gameMode    = 'bvb';
+  State.myPlayerIdx = 0;   // spectator — view from p0 perspective, but debug=true shows all
+  State.bvbSpeed    = speed;
+  State.bvbRunning  = false;
+  State.bvbGameState = data.state;
+
+  document.getElementById('lobby').style.display   = 'none';
+  document.getElementById('game-ui').style.display = 'block';
+  State.gameState = data.state;
+  render();
+
+  // Show the BvB control bar
+  _bvbShowControls();
+
+  if (speed === 'instant') {
+    await _bvbRunInstant();
+  } else if (speed !== '0') {
+    _bvbStartAuto();
+  }
+  // speed === '0' means manual — user clicks Step button
+};
+
+function _bvbShowControls() {
+  const panel = document.getElementById('action-panel');
+  const ms    = State.bvbSpeed;
+  panel.innerHTML = `
+    <div class="action-title">Bot vs Bot</div>
+    <div class="action-msg" id="action-msg" style="color:var(--text-dim);font-size:.85rem;">
+      ${ms === '0' ? 'Manual mode — click Step to advance.' : ms === 'instant' ? 'Running instantly…' : `Auto-stepping every ${ms}ms`}
+    </div>
+    <div class="btn-row" id="action-btns">
+      ${ms === '0' ? `<button class="btn btn-gold" onclick="bvbStep()">Step →</button>` : ''}
+      ${ms !== 'instant' ? `<button class="btn btn-ghost btn-sm" onclick="bvbStop()">Stop</button>` : ''}
+      <button class="btn btn-ghost btn-sm" onclick="showLobby()">◀ Back</button>
+    </div>
+  `;
+}
+
+window.bvbStep = async function() {
+  if (!State.roomId) return;
+  const data = await api(ROOM('bvb_step'), {});
+  if (!data) return;
+  State.prevHandKeys  = ['', ''];
+  State.prevPlayedKey = '';
+  State.gameState     = data.state;
+  render();
+
+  const msgEl = document.getElementById('action-msg');
+  if (msgEl) msgEl.textContent = `Last action: ${data.action}`;
+
+  if (data.state.phase === 'game_over') {
+    const w = data.state.players.find(p => p.game_score >= data.state.target_score);
+    if (msgEl) msgEl.textContent = `Game over — ${w?.name || '?'} wins!`;
+  }
+};
+
+window.bvbStop = function() {
+  State.bvbRunning = false;
+  const msgEl = document.getElementById('action-msg');
+  if (msgEl) msgEl.textContent = 'Stopped. Click Step to continue.';
+  const btnsEl = document.getElementById('action-btns');
+  if (btnsEl) btnsEl.innerHTML = `
+    <button class="btn btn-gold" onclick="bvbStep()">Step →</button>
+    <button class="btn btn-ghost btn-sm" onclick="showLobby()">◀ Back</button>
+  `;
+};
+
+function _bvbStartAuto() {
+  State.bvbRunning = true;
+  const delay = parseInt(State.bvbSpeed, 10);
+  const tick = async () => {
+    if (!State.bvbRunning || !State.roomId) return;
+    if (State.gameState?.phase === 'game_over') { State.bvbRunning = false; return; }
+    await bvbStep();
+    if (State.bvbRunning) setTimeout(tick, delay);
+  };
+  setTimeout(tick, delay);
+}
+
+async function _bvbRunInstant() {
+  const data = await api(ROOM('bvb_run'));
+  if (!data) return;
+  State.prevHandKeys  = ['', ''];
+  State.prevPlayedKey = '';
+  State.gameState     = data.state;
+  render();
+  const msgEl = document.getElementById('action-msg');
+  if (msgEl) {
+    const w = data.state.players.find(p => p.game_score >= data.state.target_score);
+    msgEl.textContent = `Done — ${data.history.length} actions. ${w?.name || '?'} wins!`;
+  }
+  const btnsEl = document.getElementById('action-btns');
+  if (btnsEl) btnsEl.innerHTML = `<button class="btn btn-ghost btn-sm" onclick="showLobby()">◀ Back</button>`;
+}
+
+
 // ─── URL-based join ───────────────────────────────────────────────────────────
 // Handles links like http://192.168.1.x:5000/join/ABCDEF
 
@@ -162,15 +269,7 @@ window.toggleDebug = function() {
   if (State.debugMode) refreshState(true);
 };
 
-window.toggleBotSpeed = async function() {
-  State.botSpeedMode = !State.botSpeedMode;
-  const btn = document.getElementById('bot-speed-btn');
-  if (btn) btn.textContent = State.botSpeedMode ? '⚡ Instant Bot' : '🐢 Bot Delay';
-  toast(State.botSpeedMode ? 'Bot moves instantly (test mode)' : 'Bot has animation delay', 'info', 1800);
-  if (State.roomId) {
-    await api(ROOM('set_bot_speed'), { instant: State.botSpeedMode });
-  }
-};
+
 
 
 // ─── Keyboard shortcuts ───────────────────────────────────────────────────────

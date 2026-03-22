@@ -22,7 +22,10 @@ window.State = {
   prevScores:    [0, 0],
   prevHandKeys:  ['', ''],   // JSON strings of card id arrays per player
   prevPlayedKey: '',          // comma-joined played card ids
-  botSpeedMode:  false,
+
+  // BvB viewer state
+  bvbRunning:   false,
+  bvbSpeed:     '500',
 
   // Animation state — tracks what's on the table so we can animate removal
   tableCards: [],            // [{card, el}] currently rendered on table

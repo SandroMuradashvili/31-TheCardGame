@@ -52,7 +52,6 @@ class Room:
         self.engine: GameEngine = None
         self.status       = "waiting"      # waiting | playing | done
         self.created_at   = time.time()
-        self.bot_instant  = False          # True = no animation delay (test mode)
 
     def is_full(self) -> bool:
         """HvB is always full; HvH needs a guest to join."""

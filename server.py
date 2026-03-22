@@ -25,6 +25,8 @@ from flask import Flask, jsonify, request, send_from_directory, make_response
 from game_engine import GamePhase
 from room_manager import Room, rooms, make_room_code
 from bot_runner import bot_act_if_needed
+from bvb_runner import bvb_step, bvb_run_full
+from bot import SimpleBot
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -126,11 +128,8 @@ def create_room():
     host_name   = body.get("player_name", "Host")[:20]
     mode        = body.get("mode", "hvb")
     target      = int(body.get("target_score", 7))
-    bot_instant = bool(body.get("bot_instant", False))
-
     room_id   = make_room_code()
     room      = Room(room_id, host_name, mode, target)
-    room.bot_instant = bot_instant
     rooms[room_id] = room
 
     local_ip  = _get_local_ip()
@@ -341,18 +340,6 @@ def skip_calculate(room_id: str):
 
 # ─── Debug / testing routes ───────────────────────────────────────────────────
 
-@app.route("/api/room/<room_id>/set_bot_speed", methods=["POST"])
-def set_bot_speed(room_id: str):
-    """Toggle instant bot moves for a room (removes animation delay)."""
-    room_id = room_id.upper()
-    if room_id not in rooms:
-        return err("Room not found", 404)
-    body    = request.get_json(silent=True) or {}
-    instant = bool(body.get("instant", False))
-    rooms[room_id].bot_instant = instant
-    return ok(bot_instant=instant)
-
-
 @app.route("/api/room/<room_id>/dev/deal_specific", methods=["POST"])
 def dev_deal_specific(room_id: str):
     """
@@ -390,6 +377,59 @@ def dev_deal_specific(room_id: str):
 
     state = engine.get_state(perspective_idx=pidx, debug=True)
     return ok(state=state)
+
+
+# ─── BvB routes ──────────────────────────────────────────────────────────────
+
+@app.route("/api/create_bvb", methods=["POST"])
+def create_bvb():
+    """Create a Bot vs Bot room. Returns room_id and initial state."""
+    body   = request.get_json(silent=True) or {}
+    target = int(body.get("target_score", 7))
+
+    from game_engine import GameEngine, HumanPlayer
+    room_id = make_room_code()
+    room    = Room(room_id, "Bot A", "bvb", target)
+    rooms[room_id] = room
+
+    p1 = SimpleBot("p1", "Bot A")
+    p2 = SimpleBot("p2", "Bot B")
+    room.engine = GameEngine(p1, p2, target_score=target)
+    room.engine.start_round()
+    room.status = "playing"
+
+    state = room.engine.get_state(debug=True)
+    return ok(room_id=room_id, state=state)
+
+
+@app.route("/api/room/<room_id>/bvb_step", methods=["POST"])
+def bvb_step_route(room_id: str):
+    """Advance the BvB game by exactly one bot action. Returns new state + action taken."""
+    room, engine = _get_room(room_id)
+    if room is None:
+        return err("Room not found", 404)
+    if engine is None:
+        return err("Game not started.")
+
+    action = bvb_step(engine)
+    state  = engine.get_state(debug=True)
+    return ok(state=state, action=action)
+
+
+@app.route("/api/room/<room_id>/bvb_run", methods=["POST"])
+def bvb_run_route(room_id: str):
+    """Run the entire remaining game headlessly. Returns final state + summary."""
+    room, engine = _get_room(room_id)
+    if room is None:
+        return err("Room not found", 404)
+    if engine is None:
+        return err("Game not started.")
+
+    body      = request.get_json(silent=True) or {}
+    max_steps = int(body.get("max_steps", 2000))
+    history   = bvb_run_full(engine, max_steps)
+    state     = engine.get_state(debug=True)
+    return ok(state=state, history=history)
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
