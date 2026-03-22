@@ -190,14 +190,21 @@ header {
   overflow: visible;
 }
 
-/* Deck widget */
+/* Deck widget
+   Deck stack: portrait cards, same size as the trump card (72×100).
+   Trump card: rotated 90deg, peeks out from under the deck to the left.
+   Overlap illusion: trump positioned so deck sits ~30px over its right edge.
+   Trump also raised slightly so it vertically centers against the deck.
+*/
 #deck-widget {
   position: absolute; right: 18px; top: 50%; transform: translateY(-50%);
   display: flex; flex-direction: column; align-items: center; gap: 5px;
 }
-.deck-stack { position: relative; width: 64px; height: 90px; }
+
+/* Portrait deck — same 72×100 as the trump card dimensions */
+.deck-stack { position: relative; width: 74px; height: 104px; z-index: 1; }
 .deck-back {
-  position: absolute; width: 62px; height: 88px;
+  position: absolute; width: 72px; height: 100px;
   background: linear-gradient(135deg, #2a1a6e, #160a44);
   border: 1.5px solid var(--gold-dim); border-radius: 6px;
   box-shadow: 1px 1px 0 rgba(0,0,0,0.4);
@@ -208,16 +215,20 @@ header {
 .deck-back::after {
   content: '★'; position: absolute; top: 50%; left: 50%;
   transform: translate(-50%, -50%);
-  color: rgba(200,168,75,0.3); font-size: 1.4rem;
+  color: rgba(200,168,75,0.3); font-size: 1.6rem;
 }
 .deck-count-label { font-size: 0.65rem; color: var(--text-dim); }
 
-/* Trump card — rotated 90° sticking out below deck */
+/* Trump card — rotated 90°, tucked under the deck.
+   right: deck is at right:18, deck width 74px → deck left edge at right:92.
+   Trump card rotated = 100px wide. We want ~30px visible to the left of deck.
+   So trump right edge should be at right:92-30=62 → right:62.
+   Vertical: top:50% centers it, nudge up a little to align with deck center. */
 #trump-card-in-deck {
   position: absolute;
-  right: 56px;
+  right: 40px;
   top: 50%;
-  transform: translateY(-50%) rotate(-90deg);
+  transform: translateY(calc(-50% - 5px)) rotate(-90deg);
   transform-origin: center center;
   width: 100px;
   height: 72px;
@@ -225,6 +236,7 @@ header {
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  z-index: 0;
 }
 #trump-card-in-deck .card {
   width: 72px !important;
@@ -484,5 +496,8 @@ header {
   .card { width: 64px; height: 90px; }
   .card-mid { font-size: 1.5rem; }
   .cc .rank { font-size: .9rem; }
+  .deck-stack { width: 62px; height: 86px; }
+  .deck-back  { width: 60px; height: 84px; }
+  #trump-card-in-deck { right: 50px; }
   #trump-card-in-deck .card { width: 60px !important; height: 84px !important; }
 }

@@ -68,10 +68,12 @@ window.renderTrump = function(s) {
     card ? `${card.rank}${sym}` : '—';
   document.getElementById('deck-count-text').textContent   = `${s.deck.size} left`;
   document.getElementById('deck-count-widget').textContent = s.deck.size;
-  document.getElementById('deck-stack').style.opacity      = s.deck.size > 0 ? '1' : '0.3';
+  const depleted = s.deck.size === 0;
+  document.getElementById('deck-stack').style.opacity       = depleted ? '0.3' : '1';
 
   const tc = document.getElementById('trump-card-in-deck');
   tc.innerHTML = card ? buildTrumpCard(card) : '';
+  tc.style.opacity = depleted ? '0.3' : '1';
 };
 
 
@@ -161,6 +163,10 @@ window.renderHandCards = function(container, hand, canSelect, playerIdx, s, reve
     if (card.id && canSelect && revealCards)
       el.addEventListener('click', () => toggleCard(card.id));
   });
+
+  // Hide new cards immediately so they don't flash at final position
+  // before the fly animation starts. flyCard will make them visible.
+  newEls.forEach(({ el }) => { el.style.opacity = '0'; });
 
   // Stagger deal animation for newly arrived cards only
   newEls.forEach(({ el, i }) => {

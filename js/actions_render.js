@@ -157,12 +157,14 @@ window.renderActions = function(s) {
 
   // ── Calculating — my right ────────────────────────────────────────────────
   if (s.phase === 'calculating' && iAmCalc) {
-    const known = me.known_pile_points;
-    const hc    = me.hidden_card_count;
-    msgEl.innerHTML = `You may calculate! Known: <span class="hl">${known} pts</span> + ${hc} hidden (${me.hidden_min_points}–${me.hidden_max_points}). <em style="color:var(--text-dim);font-size:.85em;">💡 for estimate.</em>`;
+    const known       = me.known_pile_points;
+    const hc          = me.hidden_card_count;
+    const deckEmpty   = s.deck.size === 0;
+    msgEl.innerHTML = `You may calculate! Known: <span class="hl">${known} pts</span> + ${hc} hidden (${me.hidden_min_points}–${me.hidden_max_points}). <em style="color:var(--text-dim);font-size:.85em;">💡 for estimate.</em>`
+      + (deckEmpty ? `<span class="warn" style="display:block;margin-top:4px;font-size:.85em;">⚠ Deck empty — you must calculate now.</span>` : '');
     btnsEl.innerHTML = `
-      <button class="btn btn-gold"  onclick="doCalculate()">Calculate</button>
-      <button class="btn btn-ghost" onclick="doSkipCalc()">Keep playing →</button>
+      <button class="btn btn-gold" onclick="doCalculate()">Calculate</button>
+      ${!deckEmpty ? `<button class="btn btn-ghost" onclick="doSkipCalc()">Keep playing →</button>` : ''}
     `;
     return;
   }

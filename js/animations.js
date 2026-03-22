@@ -22,10 +22,13 @@ window.flyCard = function(el, fromRect, durationMs) {
 
   el.style.transition = 'none';
   el.style.transform  = `translate(${dx}px,${dy}px)`;
+  el.style.opacity    = '0';
   el.style.zIndex     = '30';
 
-  // Double rAF ensures the browser paints the start position before animating
+  // Double rAF ensures the browser paints the start position before animating.
+  // Make the card visible here — it starts at the deck position, not the final spot.
   requestAnimationFrame(() => requestAnimationFrame(() => {
+    el.style.opacity    = '1';
     el.style.transition = `transform ${dur}ms cubic-bezier(0.25,0.46,0.45,0.94)`;
     el.style.transform  = '';
     setTimeout(() => { el.style.transition = ''; el.style.zIndex = ''; }, dur + 20);
@@ -81,11 +84,25 @@ window.animateCutSequence = function(cutEls, playedEls, cutterIdx, onDone) {
     setTimeout(() => flyCard(el, fromRect, dur), i * 70);
   });
 
-  // After all cut cards land, sweep everything toward the cutter
-  const landTime = cutEls.length * 70 + dur + 80;
+  // Pause after landing so the player can clearly see both cards on the table,
+  // then a brief flash/highlight before sweeping them away
+  const landTime = cutEls.length * 70 + dur + 60;
   setTimeout(() => {
+    // Highlight all cards briefly — gold border flash to signal a successful cut
     const all = [...Array.from(playedEls), ...cutEls];
-    _sweepToSide(all, cutterIdx, onDone);
+    all.forEach(el => {
+      if (!el) return;
+      el.style.transition  = 'box-shadow 0.15s ease';
+      el.style.boxShadow   = '0 0 0 2px #c8a84b, 0 0 12px rgba(200,168,75,0.6)';
+    });
+    // Hold the highlight for 450ms so it registers, then sweep
+    setTimeout(() => {
+      all.forEach(el => {
+        if (!el) return;
+        el.style.boxShadow = '';
+      });
+      setTimeout(() => _sweepToSide(all, cutterIdx, onDone), 80);
+    }, 450);
   }, landTime);
 };
 

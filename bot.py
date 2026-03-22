@@ -73,14 +73,15 @@ class SimpleBot(BotPlayer):
         return ("pass", [repr(c) for c in cheapest])
 
     def choose_calculate(self, engine: GameEngine) -> bool:
+        # If the deck is empty, we MUST calculate — no choice to keep playing
+        if len(engine.deck) == 0:
+            return True
+
         # Use only known_pile_points — the bot cannot see the value of cards
         # passed by the opponent (hidden_pile), just like a human player.
-        # Also factor in the best-case hidden cards to decide if it's worth risking.
-        known   = self.known_pile_points
-        hc      = self.hidden_card_count
-        # Calculate only if even the minimum possible total (hidden cards = J=2 each)
-        # is already >= 31 — i.e. guaranteed win regardless of what was passed
-        min_total = known + hc * 2   # J is worth 2, the lowest card value
+        known     = self.known_pile_points
+        hc        = self.hidden_card_count
+        min_total = known + hc * 2   # J=2 is the lowest possible hidden card value
         return min_total >= 31
 
     def choose_raise_stake(self, engine: GameEngine) -> bool:
