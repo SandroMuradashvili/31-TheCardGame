@@ -26,13 +26,13 @@ class SimpleBot(BotPlayer):
     - Never raises stakes
     - Plays highest non-trump card (preserves trump)
     - Cuts with minimum-value valid combo
-    - Calculates only when guaranteed 31+
+    - Calculates only when guaranteed 31+ (uses accurate hidden range)
     """
 
     DISPLAY_NAME = "Simple (Conservative)"
 
     def choose_play(self, engine: GameEngine) -> list[str]:
-        hand  = self.hand
+        hand = self.hand
         trump = engine.trump_suit
 
         # Play all 3 trumps for instant round win
@@ -52,7 +52,7 @@ class SimpleBot(BotPlayer):
 
     def choose_cut_or_pass(self, engine: GameEngine):
         my_idx = engine.players.index(self)
-        valid  = engine.get_valid_cuts(my_idx)
+        valid = engine.get_valid_cuts(my_idx)
 
         if valid:
             def combo_value(combo):
@@ -60,23 +60,27 @@ class SimpleBot(BotPlayer):
                     next(c for c in self.hand if repr(c) == cid).points
                     for cid in combo
                 )
+
             best = min(valid, key=combo_value)
             return ("cut", best)
 
-        n        = len(engine.played_cards)
+        n = len(engine.played_cards)
         cheapest = sorted(self.hand, key=lambda c: c.points)[:n]
         if len(cheapest) < n:
             cheapest = sorted(self.hand, key=lambda c: c.points)
         return ("pass", [repr(c) for c in cheapest])
 
     def choose_calculate(self, engine: GameEngine) -> bool:
+        my_idx = engine.players.index(self)
+
+        # Must calculate if deck is empty and hands are short
         if len(engine.deck) == 0:
             if any(len(p.hand) < 3 for p in engine.players):
                 return True
-        known     = self.known_pile_points
-        hc        = self.hidden_card_count
-        min_total = known + hc * 2
-        return min_total >= 31
+
+        # Use accurate hidden range from engine
+        tip = engine.compute_tip(my_idx)
+        return tip["guaranteed_win"]
 
     def choose_raise_stake(self, engine: GameEngine) -> bool:
         return False
@@ -110,10 +114,10 @@ class AggressiveBot(BotPlayer):
         return score / max_possible
 
     def choose_play(self, engine: GameEngine) -> list[str]:
-        hand  = self.hand
+        hand = self.hand
         trump = engine.trump_suit
 
-        # Always play 3 trumps if possible
+        # Always play 3 trumps if possible (instant win)
         trumps = [c for c in hand if c.suit == trump]
         if len(trumps) == 3:
             return [repr(c) for c in trumps]
@@ -130,7 +134,6 @@ class AggressiveBot(BotPlayer):
             suits.setdefault(c.suit, []).append(c)
         for suit, cards in suits.items():
             if len(cards) == 3:
-                # Play maliutka — all 3
                 return [repr(c) for c in cards]
 
         # Play highest non-trump to maximize points
@@ -144,7 +147,7 @@ class AggressiveBot(BotPlayer):
 
     def choose_cut_or_pass(self, engine: GameEngine):
         my_idx = engine.players.index(self)
-        valid  = engine.get_valid_cuts(my_idx)
+        valid = engine.get_valid_cuts(my_idx)
 
         if valid:
             # Cut with HIGHEST value combo — deny opponent the points
@@ -153,10 +156,12 @@ class AggressiveBot(BotPlayer):
                     next(c for c in self.hand if repr(c) == cid).points
                     for cid in combo
                 )
+
             best = max(valid, key=combo_value)
             return ("cut", best)
 
         # Check for counter-play opportunity (3 non-trump same suit)
+        from game_engine import GamePhase
         if engine.phase != GamePhase.FORCED_CUT:
             trump = engine.trump_suit
             non_trump = [c for c in self.hand if c.suit != trump]
@@ -165,44 +170,50 @@ class AggressiveBot(BotPlayer):
                 suits.setdefault(c.suit, []).append(c)
             for suit, cards in suits.items():
                 if len(cards) >= 3:
-                    # Use highest 3 of this suit as counter
                     top3 = sorted(cards, key=lambda c: c.points, reverse=True)[:3]
                     return ("counter", [repr(c) for c in top3])
 
         # Cannot cut — pass cheapest cards
-        n        = len(engine.played_cards)
+        n = len(engine.played_cards)
         cheapest = sorted(self.hand, key=lambda c: c.points)[:n]
         if len(cheapest) < n:
             cheapest = sorted(self.hand, key=lambda c: c.points)
         return ("pass", [repr(c) for c in cheapest])
 
     def choose_calculate(self, engine: GameEngine) -> bool:
+        my_idx = engine.players.index(self)
+
         if len(engine.deck) == 0:
             if any(len(p.hand) < 3 for p in engine.players):
                 return True
-        known     = self.known_pile_points
-        hc        = self.hidden_card_count
-        # Aggressive: calculate if there's a reasonable chance (not guaranteed)
-        expected  = known + hc * 6   # assume average hidden card value ~6
+
+        # Use accurate hidden range from engine
+        tip = engine.compute_tip(my_idx)
+
+        # Aggressive: calculate if expected value (midpoint) >= 31
+        mid_total = tip["known_points"] + (tip["min_total"] + tip["max_total"]) // 2 - tip["known_points"]
+        # Simpler: just use the tip max/min directly
+        # Calculate if there's a reasonable chance (not guaranteed)
+        expected = (tip["min_total"] + tip["max_total"]) / 2
         return expected >= 31
 
     def choose_raise_stake(self, engine: GameEngine) -> bool:
-        # Raise if hand is above 60% strength
         return self._hand_strength(engine) >= 0.60
 
 
 # ─── Bot Registry ─────────────────────────────────────────────────────────────
-# Add new bot classes here. The key is the bot's identifier used in API calls.
 
 BOT_REGISTRY: dict[str, type] = {
-    "simple":     SimpleBot,
+    "simple": SimpleBot,
     "aggressive": AggressiveBot,
 }
+
 
 def get_bot(bot_id: str, player_id: str, name: str) -> BotPlayer:
     """Instantiate a bot by registry key."""
     cls = BOT_REGISTRY.get(bot_id, SimpleBot)
     return cls(player_id, name)
+
 
 def list_bots() -> list[dict]:
     """Return bot list for the frontend dropdown."""

@@ -39,6 +39,20 @@ POINT_VALUES = {
 
 RANK_ORDER = [Rank.JACK, Rank.QUEEN, Rank.KING, Rank.TEN, Rank.ACE]
 
+# All 20 card ids in the deck — used for hidden-card estimation
+ALL_CARD_IDS: frozenset[str] = frozenset(
+    f"{r.value}{s.value[0].upper()}"
+    for s in Suit
+    for r in Rank
+)
+
+# Point value by card id, e.g. "AH" -> 11
+CARD_POINTS: dict[str, int] = {
+    f"{r.value}{s.value[0].upper()}": POINT_VALUES[r]
+    for s in Suit
+    for r in Rank
+}
+
 class GamePhase(str, Enum):
     WAITING      = "waiting"
     STAKES       = "stakes"
@@ -127,6 +141,9 @@ class Player(ABC):
         self.score_pile: list[Card] = []   # Cards whose faces are known to this player
         self.hidden_pile: list[Card] = []  # Cards passed by opponent — content unknown
         self.game_score: int = 0
+        # Cards this player has personally seen this round (hand + known pile + table
+        # cards that went through their hands). Used for accurate score estimation.
+        self.seen_card_ids: set[str] = set()
 
     @property
     def known_pile_points(self) -> int:
@@ -145,16 +162,24 @@ class Player(ABC):
     def pile_count(self) -> int:
         return len(self.score_pile) + len(self.hidden_pile)
 
+    def mark_seen(self, cards: list[Card]):
+        """Record that this player has observed these cards."""
+        for c in cards:
+            self.seen_card_ids.add(repr(c))
+
     def draw_to_three(self, deck: Deck):
         need = 3 - len(self.hand)
         if need > 0 and len(deck) > 0:
-            self.hand.extend(deck.deal(min(need, len(deck))))
+            drawn = deck.deal(min(need, len(deck)))
+            self.hand.extend(drawn)
+            self.mark_seen(drawn)
 
     def add_to_pile(self, cards: list[Card], hidden: bool = False):
         if hidden:
             self.hidden_pile.extend(cards)
         else:
             self.score_pile.extend(cards)
+            self.mark_seen(cards)
 
     def remove_from_hand(self, cards: list[Card]):
         for c in cards:
@@ -164,8 +189,42 @@ class Player(ABC):
         self.hand = []
         self.score_pile = []
         self.hidden_pile = []
+        self.seen_card_ids = set()
 
-    def to_dict(self, reveal_hand=False, debug=False) -> dict:
+    def compute_hidden_range(self, also_seen: set[str]) -> tuple[int, int]:
+        """
+        Compute the true min and max possible points in this player's hidden pile,
+        given all cards they've seen (own seen set + globally visible cards).
+
+        The hidden cards came from the opponent's hand — they must be cards that
+        are NOT in the combined seen set. We find the N lowest/highest point values
+        among the pool of unseen cards (where N = hidden_card_count).
+        """
+        n = self.hidden_card_count
+        if n == 0:
+            return 0, 0
+
+        combined_seen = self.seen_card_ids | also_seen
+        # Cards that could potentially be in the hidden pile
+        possible = [CARD_POINTS[cid] for cid in ALL_CARD_IDS if cid not in combined_seen]
+
+        if not possible:
+            # Edge case: all cards accounted for — use fallback
+            possible = [POINT_VALUES[Rank.JACK]] * n
+
+        # Take N lowest for min, N highest for max
+        # If fewer than N possible cards remain (shouldn't happen in normal play),
+        # repeat the min/max to fill
+        sorted_asc  = sorted(possible)
+        sorted_desc = sorted(possible, reverse=True)
+
+        min_pts = sum(sorted_asc[:n])   if len(sorted_asc)  >= n else sum(sorted_asc)  + (n - len(sorted_asc))  * sorted_asc[-1]
+        max_pts = sum(sorted_desc[:n])  if len(sorted_desc) >= n else sum(sorted_desc) + (n - len(sorted_desc)) * sorted_desc[-1]
+
+        return min_pts, max_pts
+
+    def to_dict(self, reveal_hand=False, debug=False, also_seen: Optional[set[str]] = None) -> dict:
+        hmin, hmax = self.compute_hidden_range(also_seen or set())
         return {
             "id": self.player_id,
             "name": self.name,
@@ -173,8 +232,8 @@ class Player(ABC):
             "hand_count": len(self.hand),
             "known_pile_points": self.known_pile_points,
             "hidden_card_count": self.hidden_card_count,
-            "hidden_min_points": self.hidden_card_count * POINT_VALUES[Rank.JACK],
-            "hidden_max_points": self.hidden_card_count * POINT_VALUES[Rank.ACE],
+            "hidden_min_points": hmin,
+            "hidden_max_points": hmax,
             "pile_count": self.pile_count,
             "pile_points": self.pile_points if debug else None,
             "pile_cards": [c.to_dict() for c in self.score_pile] if debug else [],
@@ -244,7 +303,7 @@ class GameEngine:
         self.current_stake = 1
         self.pending_stake = 1
         self.stake_offerer_idx: Optional[int] = None
-        self.last_raiser_idx: Optional[int] = None  # who raised last — they cannot raise again until opponent raises
+        self.last_raiser_idx: Optional[int] = None
         self.active_idx: int = 0
         self.calculator_idx: Optional[int] = None
         self.played_cards: list[Card] = []
@@ -280,6 +339,19 @@ class GameEngine:
                 return []
             result.append(found)
         return result
+
+    def _globally_visible_card_ids(self) -> set[str]:
+        """
+        Cards visible to ALL players right now:
+        trump card + cards currently on the table.
+        Used to supplement each player's personal seen set when computing estimates.
+        """
+        visible: set[str] = set()
+        if self.deck.trump_card:
+            visible.add(repr(self.deck.trump_card))
+        for c in self.played_cards:
+            visible.add(repr(c))
+        return visible
 
     # ── Validation ────────────────────────────────────────────────────────────
 
@@ -349,8 +421,15 @@ class GameEngine:
         self.deck = Deck()
         self.deck.shuffle()
         for p in self.players:
-            p.hand = self.deck.deal(3)
+            dealt = self.deck.deal(3)
+            p.hand = dealt
+            p.mark_seen(dealt)
+
         self.deck.reveal_trump()
+        # Trump card is globally visible — mark it seen for both players
+        if self.deck.trump_card:
+            for p in self.players:
+                p.mark_seen([self.deck.trump_card])
 
         self.active_idx = (self.last_round_winner_idx
                            if self.last_round_winner_idx is not None
@@ -369,8 +448,6 @@ class GameEngine:
         """
         DEV ONLY — reset the current round and deal specific cards.
         Works at ANY point during a round — no phase restriction.
-        Cards: rank (A/T/K/Q/J) + suit (H/D/C/S), e.g. "AH" = Ace of Hearts.
-        Unspecified slots are filled randomly from the remaining deck.
         """
         self.error = None
 
@@ -385,7 +462,6 @@ class GameEngine:
             suit = all_suits.get(s[-1])
             return Card(suit, rank) if rank and suit else None
 
-        # Validate all cards upfront — no duplicates allowed
         requested = {}
         for group_ids in [p0_cards[:3], p1_cards[:3],
                           ([trump_card_id] if trump_card_id else [])]:
@@ -400,7 +476,6 @@ class GameEngine:
                     return False
                 requested[key] = card
 
-        # Full reset — treat this as round 1, no scores, no history
         self.round_number       = 0
         self.current_stake      = 1
         self.pending_stake      = 1
@@ -416,9 +491,8 @@ class GameEngine:
         self.move_history       = []
         for p in self.players:
             p.reset_round()
-            p.game_score = 0   # reset score — true fresh start
+            p.game_score = 0
 
-        # Fresh deck, remove all specifically requested cards from the pool
         self.deck = Deck()
         self.deck.shuffle()
         for key, card in requested.items():
@@ -427,14 +501,12 @@ class GameEngine:
                     self.deck.cards.pop(i)
                     break
 
-        # Place trump at end (last card = trump)
         if trump_card_id:
             trump_card = requested[repr(parse(trump_card_id))]
             self.deck.cards.append(trump_card)
 
         self.deck.reveal_trump()
 
-        # Build hands: requested cards first, fill gaps from deck
         def build_hand(specific_ids):
             hand = [requested[repr(parse(cid))] for cid in specific_ids]
             while len(hand) < 3 and len(self.deck.cards) > 1:
@@ -443,6 +515,13 @@ class GameEngine:
 
         self.players[0].hand = build_hand(p0_cards[:3])
         self.players[1].hand = build_hand(p1_cards[:3])
+
+        # Mark seen for dev deal
+        for p in self.players:
+            p.mark_seen(p.hand)
+        if self.deck.trump_card:
+            for p in self.players:
+                p.mark_seen([self.deck.trump_card])
 
         self.phase = GamePhase.STAKES
         self._log("dev_deal_specific", "system", {
@@ -455,19 +534,12 @@ class GameEngine:
     # ── Stakes ────────────────────────────────────────────────────────────────
 
     def can_raise_stake(self, player_idx: int) -> bool:
-        # Can raise ONLY if:
-        # - round is active
-        # - stake < 6
-        # - no pending offer from this player
-        # - this player was NOT the last one to raise (raises must strictly alternate)
         if self.phase in (GamePhase.WAITING, GamePhase.ROUND_OVER, GamePhase.GAME_OVER):
             return False
         if self.current_stake >= 6:
             return False
-        # Can't raise while your own offer is still pending
         if self.stake_offerer_idx is not None and self.stake_offerer_idx == player_idx:
             return False
-        # Can't raise if you were the last raiser — must wait for opponent to raise first
         if self.last_raiser_idx == player_idx:
             return False
         base = self.pending_stake if self.stake_offerer_idx is not None else self.current_stake
@@ -481,7 +553,7 @@ class GameEngine:
         base = self.pending_stake if self.stake_offerer_idx is not None else self.current_stake
         self.pending_stake     = base + 1
         self.stake_offerer_idx = player_idx
-        self.last_raiser_idx   = player_idx  # this player cannot raise again until opponent raises
+        self.last_raiser_idx   = player_idx
         self._log("stake_offer", self.players[player_idx].player_id, {"stake": self.pending_stake})
         return True
 
@@ -509,7 +581,7 @@ class GameEngine:
             self.error = "Cannot decline your own offer."
             return False
         winner_idx = self.stake_offerer_idx
-        win_stake  = self.current_stake  # previous stake, not pending
+        win_stake  = self.current_stake
         self._log("stake_decline", self.players[player_idx].player_id, {
             "declined_stake": self.pending_stake,
             "win_stake": win_stake,
@@ -568,6 +640,11 @@ class GameEngine:
         player.remove_from_hand(cards)
         self.played_cards       = cards
         self.playing_player_idx = player_idx
+
+        # Opponent now sees these cards on the table
+        opp_idx = 1 - player_idx
+        self.players[opp_idx].mark_seen(cards)
+
         self._log("play", player.player_id, {
             "cards": [repr(c) for c in cards],
             "is_maliutka": self.is_maliutka,
@@ -579,17 +656,9 @@ class GameEngine:
 
     def counter_play(self, player_idx: int, card_ids: list[str]) -> bool:
         """
-        During CUTTING phase, instead of cutting or passing, the cutter can
-        play 3 same-suit non-trump cards as a counter-attack (counter maliutka).
-
-        The original played cards are returned to the original player's pile
-        (they take them back as known cards). The counter cards go on the table
-        and now the ORIGINAL player must cut or pass those 3 cards.
-
-        This is only valid when:
-        - Phase is CUTTING (not FORCED_CUT — can't counter a maliutka)
-        - Exactly 3 cards, same non-trump suit
-        - Player is the cutter (not the one who played)
+        During CUTTING phase, the cutter plays 3 same-suit non-trump cards as a counter.
+        The original played cards are returned to the original player's hand.
+        The counter cards go on the table and now the ORIGINAL player must cut or pass.
         """
         self.error = None
         if self.phase != GamePhase.CUTTING:
@@ -622,11 +691,14 @@ class GameEngine:
         original_player = self.players[self.playing_player_idx]
         original_player.hand.extend(self.played_cards)
 
-        # Counter cards go on the table — original player must now cut or pass
+        # Opponent sees the counter cards on the table
+        opp_idx = 1 - player_idx
+        self.players[opp_idx].mark_seen(counter)
+
         cutter.remove_from_hand(counter)
         self.played_cards       = counter
         self.playing_player_idx = player_idx
-        self.is_maliutka        = True   # forced cut — 3 non-trump same suit
+        self.is_maliutka        = True
         self._log("counter_play", cutter.player_id, {
             "cards": [repr(c) for c in counter],
         })
@@ -641,11 +713,28 @@ class GameEngine:
         if player_idx == self.playing_player_idx:
             self.error = "Cannot cut your own cards."
             return False
+
         cutter    = self.players[player_idx]
         cut_cards = self._cards_from_ids(cutter, card_ids)
         if not cut_cards:
             self.error = "Invalid card selection."
             return False
+
+        # ── Three trumps: instant round win regardless of what was played ─────
+        # Check this BEFORE _can_cut — 3 trumps win unconditionally even if the
+        # played cards are a different count or non-trump suit (e.g. 1 card played,
+        # cutter plays all 3 trumps as Bura). The _can_cut check would reject this
+        # because counts don't match, so we intercept first.
+        if self._is_three_trumps(cut_cards):
+            cutter.remove_from_hand(cut_cards)
+            # All cards (played + cut) go into cutter's known pile
+            cutter.add_to_pile(self.played_cards + cut_cards, hidden=False)
+            self.played_cards = []
+            self.is_maliutka  = False
+            self._log("three_trumps", cutter.player_id, {"cards": [repr(c) for c in cut_cards]})
+            self._end_round(player_idx, self.current_stake, RoundEndReason.THREE_TRUMPS)
+            return True
+
         if not self._can_cut(self.played_cards, cut_cards):
             self.error = "These cards cannot beat the played cards."
             return False
@@ -676,21 +765,29 @@ class GameEngine:
         if not pass_list:
             self.error = "Invalid card selection."
             return False
-        # In forced_cut (maliutka), if the passer has fewer cards than required
-        # (deck ran low, they couldn't draw to full hand), accept a partial pass
-        # rather than getting stuck. The passer gives everything they have.
         required = len(self.played_cards)
         if len(pass_list) != required:
             if self.phase == GamePhase.FORCED_CUT and len(pass_list) == len(passer.hand):
-                pass  # Accept partial pass — passer is out of cards
+                pass  # Accept partial pass
             else:
                 self.error = f"Must pass exactly {required} card(s)."
                 return False
 
         passer.remove_from_hand(pass_list)
         playing_player = self.players[self.playing_player_idx]
-        playing_player.add_to_pile(self.played_cards, hidden=False)  # own cards back — known
-        playing_player.add_to_pile(pass_list, hidden=True)            # opponent's — hidden
+
+        # The player who played gets their own cards back as known
+        playing_player.add_to_pile(self.played_cards, hidden=False)
+        # And receives passed cards as hidden (they don't know what they are)
+        playing_player.add_to_pile(pass_list, hidden=True)
+
+        # The passer knows what they passed — mark those cards as seen by passer
+        # (they already were in passer's hand, so seen_card_ids already has them)
+
+        # The player who played now "knows" the passed cards are no longer in
+        # the unknown pool — but they don't know their identity. This is correctly
+        # modelled: pass_list goes to hidden_pile, not seen by playing_player.
+
         self.calculator_idx = self.playing_player_idx
         self.active_idx     = self.playing_player_idx
         self._log("pass", passer.player_id, {"passed_count": len(pass_list)})
@@ -740,15 +837,10 @@ class GameEngine:
         h1 = len(self.players[1].hand)
 
         if h0 == 0 or h1 == 0:
-            # Someone has no cards — round ends by points
             self._resolve_deck_exhausted()
         elif h0 == 3 and h1 == 3:
-            # Both have full hands — deck may or may not be empty, play continues
             self.phase = GamePhase.PLAYING
         else:
-            # Deck ran out and at least one player has fewer than 3 cards.
-            # No further play is possible fairly — force calculate.
-            # calculator_idx was already set by cut_cards or pass_cards.
             self.phase = GamePhase.CALCULATING
 
     def _resolve_deck_exhausted(self):
@@ -792,8 +884,10 @@ class GameEngine:
         p        = self.players[player_idx]
         known    = p.known_pile_points
         hc       = p.hidden_card_count
-        min_total = known + hc * POINT_VALUES[Rank.JACK]
-        max_total = known + hc * POINT_VALUES[Rank.ACE]
+        globally_visible = self._globally_visible_card_ids()
+        min_hidden, max_hidden = p.compute_hidden_range(globally_visible)
+        min_total = known + min_hidden
+        max_total = known + max_hidden
         return {
             "known_points":     known,
             "hidden_count":     hc,
@@ -806,10 +900,17 @@ class GameEngine:
     # ── State snapshot ────────────────────────────────────────────────────────
 
     def get_state(self, perspective_idx: Optional[int] = None, debug: bool = False) -> dict:
+        globally_visible = self._globally_visible_card_ids()
+
         player_states = []
         for i, p in enumerate(self.players):
             reveal_hand = debug or (perspective_idx is None) or (i == perspective_idx)
-            player_states.append(p.to_dict(reveal_hand=reveal_hand, debug=debug))
+            # Pass globally visible cards so hidden range is computed correctly
+            player_states.append(p.to_dict(
+                reveal_hand=reveal_hand,
+                debug=debug,
+                also_seen=globally_visible,
+            ))
 
         valid_cuts = []
         if self.phase in (GamePhase.CUTTING, GamePhase.FORCED_CUT) and self.playing_player_idx is not None:

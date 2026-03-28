@@ -30,6 +30,7 @@ window.render = function() {
   }
   if (s.phase !== 'round_over' && s.phase !== 'game_over') {
     State.modalShown = false;
+    document.getElementById('round-modal').classList.remove('visible');
   }
 };
 
@@ -288,9 +289,9 @@ window.showRoundModal = function(s) {
                     + `  (Stake: ${s.current_stake})`;
 
     if (State.gameMode === 'hvh' && State.myPlayerIdx !== 0) {
-      btn.textContent = 'Waiting for host…';
-      btn.disabled    = true;
-      btn.onclick     = null;
+      btn.textContent = 'Got it — waiting for host…';
+      btn.disabled    = false;
+      btn.onclick     = () => document.getElementById('round-modal').classList.remove('visible');
     } else {
       btn.textContent = 'Next Round →';
       btn.disabled    = false;
