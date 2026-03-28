@@ -14,6 +14,7 @@ Imported by: server.py (all Flask routes call into here)
 import random
 import string
 import time
+from bot import get_bot, BOT_REGISTRY, SimpleBot
 
 from game_engine import GameEngine, HumanPlayer, GamePhase
 from bot import SimpleBot
@@ -57,15 +58,19 @@ class Room:
         """HvB is always full; HvH needs a guest to join."""
         return self.mode == "hvb" or bool(self.guest_name)
 
-    def start_game(self):
+
+    def start_game(self, bot_id: str = "simple"):
         """
-        Instantiate the GameEngine and deal the first round.
-        For HvB, also immediately runs the bot if it goes first.
-        """
+               Instantiate the GameEngine and deal the first round.
+               For HvB, also immediately runs the bot if it goes first.
+               """
         p1 = HumanPlayer("p1", self.host_name)
-        p2 = (SimpleBot("p2", "Bot")
-              if self.mode == "hvb"
-              else HumanPlayer("p2", self.guest_name))
+        if self.mode == "hvb":
+            from bot import BOT_REGISTRY
+            name = getattr(BOT_REGISTRY.get(bot_id, SimpleBot), "DISPLAY_NAME", bot_id)
+            p2 = get_bot(bot_id, "p2", name)
+        else:
+            p2 = HumanPlayer("p2", self.guest_name)
 
         self.engine = GameEngine(p1, p2, target_score=self.target_score)
         self.engine.start_round()

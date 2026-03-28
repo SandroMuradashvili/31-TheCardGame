@@ -171,6 +171,10 @@
     <div id="tab-hvb-content">
       <div class="field"><label>Your Name</label><input id="lb-name-hvb" value="Player" maxlength="20"></div>
       <div class="field">
+        <label>Opponent Bot</label>
+        <select id="lb-bot-hvb"></select>
+      </div>
+      <div class="field">
         <label>Target Score</label>
         <select id="lb-target-hvb">
           <option value="7" selected>7 pts</option>
@@ -527,6 +531,17 @@
   document.getElementById('tab-bvb').addEventListener('click', () => {
     bvbInitLobby();
   });
+
+    // Populate HvB bot dropdown on load
+  (async () => {
+    const data = await fetch('/api/bots/list').then(r => r.json());
+    if (!data?.bots) return;
+    const sel = document.getElementById('lb-bot-hvb');
+    sel.innerHTML = data.bots.map(b =>
+      `<option value="${b.id}">${b.name}</option>`
+    ).join('');
+  })();
+
 </script>
 </body>
 </html>

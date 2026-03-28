@@ -127,6 +127,7 @@ def create_room():
     host_name = body.get("player_name", "Host")[:20]
     mode      = body.get("mode", "hvb")
     target    = int(body.get("target_score", 7))
+    bot_id = body.get("bot_id", "simple")
     room_id   = make_room_code()
     room      = Room(room_id, host_name, mode, target)
     rooms[room_id] = room

@@ -185,15 +185,12 @@ window.updateActionButtons = function() {
     playBtn.textContent = sel > 0 ? `Play ${sel} card${sel > 1 ? 's' : ''}` : 'Play cards…';
   }
 
-  const cutBtn = document.getElementById('btn-cut');
-  if (cutBtn) {
-    const n       = s.played_cards?.length || 0;
-    const hand    = s.players[State.myPlayerIdx].hand || [];
-    const selC    = State.selectedCards.map(id => hand.find(c => c.id === id)).filter(Boolean);
-    const sameSuit = selC.length > 0 && selC.every(c => c.suit === selC[0].suit);
-    cutBtn.disabled    = sel !== n || !sameSuit;
+ const cutBtn = document.getElementById('btn-cut');
+if (cutBtn) {
+    const n = s.played_cards?.length || 0;
+    cutBtn.disabled    = sel !== n;
     cutBtn.textContent = sel > 0 ? `Cut with ${sel}` : 'Cut…';
-  }
+}
 
   const counterBtn = document.getElementById('btn-counter');
   if (counterBtn) counterBtn.disabled = !isCounterSelection();

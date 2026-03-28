@@ -371,7 +371,7 @@ window.bvbInitLobby = async function() {
     const sel = document.getElementById(id);
     if (!sel) return;
     sel.innerHTML = bots.map((b, j) =>
-      `<option value="${b}" ${j === i % bots.length ? 'selected' : ''}>${b}</option>`
+  `<option value="${b.id}" ${j === i % bots.length ? 'selected' : ''}>${b.name}</option>`
     ).join('');
   });
 };

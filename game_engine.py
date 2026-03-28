@@ -292,22 +292,29 @@ class GameEngine:
             return "All played cards must be the same suit."
         return None
 
+    def _beats(self, my_card: Card, opp_card: Card) -> bool:
+        my_trump = my_card.suit == self.trump_suit
+        opp_trump = opp_card.suit == self.trump_suit
+
+        if my_trump and not opp_trump:
+            return True
+        if opp_trump and not my_trump:
+            return False
+        if my_card.suit == opp_card.suit:
+            return my_card.points > opp_card.points
+        return False
+
     def _can_cut(self, played: list[Card], cut_attempt: list[Card]) -> bool:
         if len(cut_attempt) != len(played):
             return False
-        if len({c.suit for c in cut_attempt}) > 1:
-            return False
-        played_suit   = played[0].suit
-        cut_suit      = cut_attempt[0].suit
-        played_is_trump = played_suit == self.trump_suit
-        cut_is_trump    = cut_suit   == self.trump_suit
-        played_total  = sum(c.points for c in played)
-        cut_total     = sum(c.points for c in cut_attempt)
-        if played_is_trump:
-            return cut_is_trump and cut_total > played_total
-        if cut_suit == played_suit:
-            return cut_total > played_total
-        return cut_is_trump  # trump always beats non-trump
+
+        def sort_key(card):
+            return (1 if card.suit == self.trump_suit else 0, card.points)
+
+        played_sorted = sorted(played, key=sort_key)
+        cut_sorted = sorted(cut_attempt, key=sort_key)
+
+        return all(self._beats(c, p) for c, p in zip(cut_sorted, played_sorted))
 
     def _is_three_trumps(self, cards: list[Card]) -> bool:
         return (len(cards) == 3
@@ -487,6 +494,7 @@ class GameEngine:
             self.error = "Cannot accept your own offer."
             return False
         self.current_stake     = self.pending_stake
+        self.last_raiser_idx = self.stake_offerer_idx
         self.stake_offerer_idx = None
         self._log("stake_accept", self.players[player_idx].player_id, {"stake": self.current_stake})
         return True
@@ -770,14 +778,12 @@ class GameEngine:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def get_valid_cuts(self, player_idx: int) -> list[list[str]]:
-        """Return all valid cut combos for player_idx against current played_cards."""
         player = self.players[player_idx]
-        n      = len(self.played_cards)
-        valid  = []
+        n = len(self.played_cards)
+        valid = []
         for combo in combinations(player.hand, n):
             combo_list = list(combo)
-            if (len({c.suit for c in combo_list}) == 1
-                    and self._can_cut(self.played_cards, combo_list)):
+            if self._can_cut(self.played_cards, combo_list):
                 valid.append([repr(c) for c in combo_list])
         return valid
 

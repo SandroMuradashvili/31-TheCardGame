@@ -9,9 +9,10 @@ window.switchTab = function(tab) {
 window.startHvB = async function() {
   const name   = document.getElementById('lb-name-hvb').value.trim() || 'Player';
   const target = document.getElementById('lb-target-hvb').value;
+  const botId  = document.getElementById('lb-bot-hvb').value;   // ← add this
   State.gameMode    = 'hvb';
   State.myPlayerIdx = 0;
-  const data = await api('/api/create_room', { player_name: name, mode: 'hvb', target_score: target });
+  const data = await api('/api/create_room', { player_name: name, mode: 'hvb', target_score: target, bot_id: botId });
   if (!data) return;
   State.roomId = data.room_id;
   enterGame(data);
@@ -114,15 +115,15 @@ window.startPolling = function() {
     // IMPORTANT: never stop polling during stake negotiations — counter-raises can flip
     // stake_offerer_idx at any time and we must see that change.
     const isMyTurn =
-      // My turn to play cards
-      (phase === 'playing'      && s.active_player_idx    === myPlayerIdx)
-      // Stakes with no offer pending and it's my turn — I need to act, not poll
-   || (phase === 'stakes'       && s.stake_offerer_idx    === null
-                                && s.active_player_idx    === myPlayerIdx)
-      // My turn to cut/pass (I am NOT the one who played)
-   || ((phase === 'cutting' || phase === 'forced_cut') && s.playing_player_idx !== myPlayerIdx)
-      // I have the calculate right
-   || (phase === 'calculating'  && s.calculator_idx       === myPlayerIdx);
+       // My turn to play cards — but not while a stake offer is pending
+       (phase === 'playing'      && s.active_player_idx    === myPlayerIdx && s.stake_offerer_idx === null)
+       // Stakes with no offer pending and it's my turn — I need to act, not poll
+    || (phase === 'stakes'       && s.stake_offerer_idx    === null
+                                 && s.active_player_idx    === myPlayerIdx)
+       // My turn to cut/pass (I am NOT the one who played)
+    || ((phase === 'cutting' || phase === 'forced_cut') && s.playing_player_idx !== myPlayerIdx && s.stake_offerer_idx === null)
+       // I have the calculate right
+    || (phase === 'calculating'  && s.calculator_idx       === myPlayerIdx);
 
     if (isMyTurn) return;
     // Keep polling during round_over so guest sees when host starts next round.
