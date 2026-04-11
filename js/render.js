@@ -316,23 +316,28 @@ window.toggleTip = function(evt) {
   const container = document.getElementById('tip-popup-container');
 
   if (State.showTip) {
-    const tip = State.gameState?.tip;
-    if (tip) {
+    const s   = State.gameState;
+    const me  = s?.players[State.myPlayerIdx];
+    const opp = s?.players[1 - State.myPlayerIdx];
+    if (me && opp) {
       iconBtn?.classList.add('active');
-      renderTip(tip, container);
-    } else {
-      const me = State.gameState?.players[State.myPlayerIdx];
-      if (me) {
-        iconBtn?.classList.add('active');
-        renderTip({
-          known_points:     me.known_pile_points,
-          hidden_count:     me.hidden_card_count,
-          min_total:        me.known_pile_points + me.hidden_card_count * 2,
-          max_total:        me.known_pile_points + me.hidden_card_count * 11,
-          can_possibly_win: (me.known_pile_points + me.hidden_card_count * 11) >= 31,
-          guaranteed_win:   (me.known_pile_points + me.hidden_card_count * 2)  >= 31,
-        }, container);
-      }
+      const tip = s.tip || {
+        known_points:     me.known_pile_points,
+        hidden_count:     me.hidden_card_count,
+        min_total:        me.known_pile_points + me.hidden_card_count * 2,
+        max_total:        me.known_pile_points + me.hidden_card_count * 11,
+        can_possibly_win: (me.known_pile_points + me.hidden_card_count * 11) >= 31,
+        guaranteed_win:   (me.known_pile_points + me.hidden_card_count * 2)  >= 31,
+      };
+      const oppTip = {
+        known_points: opp.known_pile_points,
+        hidden_count: opp.hidden_card_count,
+        min_total:    opp.known_pile_points + opp.hidden_min_points,
+        max_total:    opp.known_pile_points + opp.hidden_max_points,
+        pile_count:   opp.pile_count,
+        name:         opp.name,
+      };
+      renderTip(tip, oppTip, container);
     }
     setTimeout(() => document.addEventListener('click', closeTipOnClickOutside, { once: true }), 50);
   } else {
@@ -348,17 +353,36 @@ window.closeTipOnClickOutside = function() {
   if (c) c.innerHTML = '';
 };
 
-window.renderTip = function(tip, container) {
+window.renderTip = function(tip, oppTip, container) {
   const sure     = tip.guaranteed_win;
   const possible = tip.can_possibly_win;
+
+  // Opponent pile section
+  const oppCanWin  = oppTip.max_total >= 31;
+  const oppSureDanger = oppTip.min_total >= 31;
+  const oppHidden  = oppTip.hidden_count > 0
+    ? ` + <span class="tl">${oppTip.hidden_count} hidden (${oppTip.min_total - oppTip.known_points}–${oppTip.max_total - oppTip.known_points})</span>`
+    : '';
+  const oppStatus = oppSureDanger
+    ? `<span class="tx">⚠ They can definitely calculate — danger!</span>`
+    : oppCanWin
+      ? `<span class="tl">⚠ They might reach 31 with hidden cards.</span>`
+      : `<span class="tw">✓ They cannot reach 31 even best case.</span>`;
+
   container.innerHTML = `
     <div class="tip-popup">
-      <strong style="color:var(--gold);font-size:.85rem;">Score Estimate</strong><br>
+      <strong style="color:var(--gold);font-size:.85rem;">Your Pile</strong><br>
       Known: <span class="tl">${tip.known_points} pts</span><br>
       Hidden: <span class="tl">${tip.hidden_count} cards</span>
         → <span class="tl">${tip.min_total}–${tip.max_total}</span><br>
       ${sure     ? `<span class="tw">✓ Definitely 31+ — safe to calculate!</span>`
       : possible ? `<span class="tl">⚠ Possible win if hidden cards cooperate.</span>`
                  : `<span class="tx">✗ Cannot reach 31 even in best case.</span>`}
+      <hr style="border:none;border-top:1px solid rgba(255,255,255,0.1);margin:7px 0;">
+      <strong style="color:var(--gold);font-size:.85rem;">${oppTip.name}'s Pile</strong><br>
+      Known: <span class="tl">${oppTip.known_points} pts</span>${oppHidden}<br>
+      Range: <span class="tl">${oppTip.min_total}–${oppTip.max_total}</span>
+        (${oppTip.pile_count} cards)<br>
+      ${oppStatus}
     </div>`;
 };
