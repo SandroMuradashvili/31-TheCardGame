@@ -75,6 +75,17 @@ window.isCounterSelection = function() {
   const suit = selCards[0].suit;
   return selCards.every(c => c.suit === suit) && suit !== s.trump_suit;
 };
+window.isBuraSelection = function() {
+  try {
+    const s = State.gameState;
+    if (!s || !s.players || State.selectedCards.length !== 3) return false;
+    const hand = s.players[State.myPlayerIdx]?.hand || [];
+    const selCards = State.selectedCards.map(id => hand.find(c => c.id === id)).filter(Boolean);
+    if (selCards.length !== 3) return false;
+    return selCards.every(c => c.suit && c.suit === s.trump_suit);
+  } catch (e) { return false; }
+};
+
 
 // ─── Card selection ───────────────────────────────────────────────────────────
 
@@ -178,23 +189,40 @@ window.updateActionButtons = function() {
   const s = State.gameState;
   if (!s) return;
   const sel = State.selectedCards.length;
+  const isBura = isBuraSelection();
 
+  // 1. Play Button (When starting your turn)
   const playBtn = document.getElementById('btn-play');
   if (playBtn) {
     playBtn.disabled    = sel === 0;
-    playBtn.textContent = sel > 0 ? `Play ${sel} card${sel > 1 ? 's' : ''}` : 'Play cards…';
+    playBtn.textContent = isBura ? '🏆 BURA! (Win)' : (sel > 0 ? `Play ${sel} card${sel > 1 ? 's' : ''}` : 'Play cards…');
   }
 
- const cutBtn = document.getElementById('btn-cut');
-if (cutBtn) {
-    const n = s.played_cards?.length || 0;
-    cutBtn.disabled    = sel !== n;
-    cutBtn.textContent = sel > 0 ? `Cut with ${sel}` : 'Cut…';
-}
+  // 2. Normal Cut Button (Disabled if you are dropping BURA)
+  const cutBtn = document.getElementById('btn-cut');
+  if (cutBtn) {
+      const n = s.played_cards?.length || 0;
+      cutBtn.disabled    = (sel !== n) || isBura;
+      cutBtn.textContent = sel > 0 ? `Cut with ${sel}` : 'Cut…';
+  }
 
+  // 3. Counter Button -> Morphs into BURA button!
   const counterBtn = document.getElementById('btn-counter');
-  if (counterBtn) counterBtn.disabled = !isCounterSelection();
+  if (counterBtn) {
+      if (isBura) {
+          counterBtn.disabled = false;
+          counterBtn.textContent = '🏆 BURA! (Win)';
+          counterBtn.className = 'btn btn-gold';
+          counterBtn.onclick = () => doCutCards();
+      } else {
+          counterBtn.disabled = !isCounterSelection();
+          counterBtn.textContent = '⚡ Counter (3)';
+          counterBtn.className = 'btn btn-green';
+          counterBtn.onclick = () => doCounterPlay();
+      }
+  }
 
+  // 4. Pass Button
   const passBtn = document.getElementById('btn-pass');
   if (passBtn) {
     const n = State.gameState?.played_cards?.length || 0;

@@ -284,15 +284,19 @@ window.checkUrlJoin = function() {
   }
 };
 
+// Find the document.addEventListener('keydown', e => { block at the very bottom
 document.addEventListener('keydown', e => {
   if (!State.gameState) return;
   const s = State.gameState;
   if (e.key === 'Enter') {
     if (s.phase === 'playing' && s.active_player_idx === State.myPlayerIdx && State.selectedCards.length)
       doPlayCards();
+
+    // Allow enter for normal cuts OR if a Bura is selected
     if ((s.phase === 'cutting' || s.phase === 'forced_cut') &&
-        State.selectedCards.length === (s.played_cards?.length || 0))
+        (State.selectedCards.length === (s.played_cards?.length || 0) || isBuraSelection()))
       doCutCards();
+
     if (State.passModeActive && State.selectedCards.length === State.passCount)
       doPassCards();
   }

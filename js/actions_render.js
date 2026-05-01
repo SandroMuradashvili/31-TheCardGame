@@ -106,50 +106,55 @@ window.renderActions = function(s) {
 
 
   // ── Cutting — I must respond (I am NOT the one who played) ───────────────
-if ((s.phase === 'cutting' || s.phase === 'forced_cut') && iAmCutter) {
-  const n          = s.played_cards?.length || 0;
-  const isForced   = s.phase === 'forced_cut';
-  // Cut: exactly n cards, all same suit
-  const selCards   = State.selectedCards.map(id => (me.hand||[]).find(c => c.id === id)).filter(Boolean);
-  const allSameSuit = selCards.length > 0 && selCards.every(c => c.suit === selCards[0].suit);
-  const canCut     = sel === n && allSameSuit;
-  // Pass: exactly n cards, any suit
-  const canPass    = sel === n;
-  const canCounter = isCounterSelection();
+  if ((s.phase === 'cutting' || s.phase === 'forced_cut') && iAmCutter) {
+    const n          = s.played_cards?.length || 0;
+    const isForced   = s.phase === 'forced_cut';
+    const selCards   = State.selectedCards.map(id => (me.hand||[]).find(c => c.id === id)).filter(Boolean);
+    const allSameSuit = selCards.length > 0 && selCards.every(c => c.suit === selCards[0].suit);
 
-  if (isForced) {
-    msgEl.innerHTML = `<span class="warn">⚡ MALIUTKA!</span> ${them.name} played ${n} — cut with ${n} higher same-suit or trump, or pass.`;
-  } else {
-    msgEl.innerHTML = `${them.name} played ${n} card${n > 1 ? 's' : ''} — cut, counter with 3 non-trump same-suit, or pass.`;
+    const isBura     = typeof isBuraSelection === 'function' ? isBuraSelection() : false;
+    const canCut     = (sel === n && allSameSuit) && !isBura;
+    const canPass    = sel === n;
+    const canCounter = isCounterSelection();
+
+    if (isForced) {
+      msgEl.innerHTML = `<span class="warn">⚡ MALIUTKA!</span> ${them.name} played ${n} — cut with ${n} higher same-suit or trump, or pass.`;
+    } else {
+      msgEl.innerHTML = `${them.name} played ${n} card${n > 1 ? 's' : ''} — cut, counter with 3 non-trump same-suit, or pass.`;
+    }
+
+    // Notice the style="display" trick. Normally, Counter is hidden during Maliutkas.
+    // But if you select BURA, it magically appears to save you!
+    btnsEl.innerHTML = `
+      <button class="btn btn-gold"  id="btn-cut" onclick="doCutCards()" ${!canCut ? 'disabled' : ''}>
+        ${sel > 0 ? `Cut with ${sel}` : 'Cut…'}
+      </button>
+
+      <button class="btn ${isBura ? 'btn-gold' : 'btn-green'}" id="btn-counter" 
+              onclick="${isBura ? 'doCutCards()' : 'doCounterPlay()'}" 
+              ${!(canCounter || isBura) ? 'disabled' : ''}
+              style="display: ${(!isForced || isBura) ? 'inline-block' : 'none'};">
+        ${isBura ? '🏆 BURA! (Win)' : '⚡ Counter (3)'}
+      </button>
+
+      <button class="btn btn-ghost" id="btn-pass" onclick="doPassAuto(${n})" ${!canPass ? 'disabled' : ''}>
+        ${canPass ? `Pass selected` : `Pass (select ${n})`}
+      </button>
+      ${sel > 0 ? `<button class="btn btn-ghost btn-sm" onclick="clearSel()">Clear</button>` : ''}
+    `;
+
+    if ((s.valid_cuts || []).length > 0) {
+      const hint = s.valid_cuts.slice(0, 2).map(c => `[${c.join(' ')}]`).join('  ');
+      btnsEl.insertAdjacentHTML('beforeend',
+        `<div style="width:100%;font-size:.72rem;color:var(--text-dim);margin-top:4px;">
+           Valid cuts: <span style="color:var(--gold)">${hint}</span>
+         </div>`);
+    }
+
+    if (canRaise) _renderRaiseOnly(btnsEl, s);
+
+    return;
   }
-
-  btnsEl.innerHTML = `
-    <button class="btn btn-gold"  id="btn-cut" onclick="doCutCards()" ${!canCut ? 'disabled' : ''}>
-      ${sel > 0 ? `Cut with ${sel}` : 'Cut…'}
-    </button>
-    ${!isForced ? `
-      <button class="btn btn-green" id="btn-counter" onclick="doCounterPlay()" ${!canCounter ? 'disabled' : ''}>
-        ⚡ Counter (3)
-      </button>` : ''}
-    <button class="btn btn-ghost" id="btn-pass" onclick="doPassAuto(${n})" ${!canPass ? 'disabled' : ''}>
-      ${canPass ? `Pass selected` : `Pass (select ${n})`}
-    </button>
-    ${sel > 0 ? `<button class="btn btn-ghost btn-sm" onclick="clearSel()">Clear</button>` : ''}
-  `;
-
-  if ((s.valid_cuts || []).length > 0) {
-    const hint = s.valid_cuts.slice(0, 2).map(c => `[${c.join(' ')}]`).join('  ');
-    btnsEl.insertAdjacentHTML('beforeend',
-      `<div style="width:100%;font-size:.72rem;color:var(--text-dim);margin-top:4px;">
-         Valid cuts: <span style="color:var(--gold)">${hint}</span>
-       </div>`);
-  }
-
-  // Raise button — allowed during cutting phase if opponent was the last to raise
-  if (canRaise) _renderRaiseOnly(btnsEl, s);
-
-  return;
-}
 
   // ── Cutting — I played, waiting for opponent ──────────────────────────────
   if ((s.phase === 'cutting' || s.phase === 'forced_cut') && iAmPlaying) {
@@ -185,11 +190,13 @@ if ((s.phase === 'cutting' || s.phase === 'forced_cut') && iAmCutter) {
 // ─── Button helpers ───────────────────────────────────────────────────────────
 
 function _renderPlayAndRaise(btnsEl, sel, canRaise, s) {
+  const isBura = typeof isBuraSelection === 'function' ? isBuraSelection() : false;
+
   const playBtn = document.createElement('button');
   playBtn.className   = 'btn btn-gold';
   playBtn.id          = 'btn-play';
   playBtn.disabled    = sel === 0;
-  playBtn.textContent = sel > 0 ? `Play ${sel} card${sel > 1 ? 's' : ''}` : 'Play cards…';
+  playBtn.textContent = isBura ? '🏆 BURA! (Win)' : (sel > 0 ? `Play ${sel} card${sel > 1 ? 's' : ''}` : 'Play cards…');
   playBtn.onclick     = doPlayCards;
   btnsEl.appendChild(playBtn);
 

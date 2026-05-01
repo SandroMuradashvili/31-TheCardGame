@@ -264,7 +264,11 @@ def _run_matchup(sim_id: str, matchup_idx: int,
                 result["final_stake"],
             )
         except Exception as e:
-            pass  # Skip bad games silently
+            import traceback
+            print(f"\n[SIMULATION CRASH] {bot_a_id} vs {bot_b_id} (Game {g})")
+            traceback.print_exc()
+            # We still skip the game so the whole server doesn't crash,
+            # but now we can clearly see the error in the terminal!
 
         # Update progress
         sim["matchups"][matchup_idx]["games_done"] = g + 1
@@ -281,14 +285,13 @@ def _run_matchup(sim_id: str, matchup_idx: int,
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 
-def start_simulation(bot_ids: list[str], games_per_matchup: int,
+def start_simulation(pairs: list[list[str]], games_per_matchup: int,
                      target_score: int = 7) -> str:
     """
-    Start a round-robin simulation among the given bots.
+    Start a simulation for the given bot pairs.
     Returns sim_id.
     """
     sim_id   = str(uuid.uuid4())[:8]
-    pairs    = list(combinations(bot_ids, 2))
     matchups = []
 
     for i, (a, b) in enumerate(pairs):

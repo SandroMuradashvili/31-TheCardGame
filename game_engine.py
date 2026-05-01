@@ -7,6 +7,15 @@ Safe to import anywhere and to run thousands of simulated games headlessly.
 All other Python files import FROM here — this file imports nothing from this project.
 """
 
+"""
+AI DEBUGGING REFERENCE:
+- GamePhase.STAKES: Players negotiate points. Only allowed to transition to PLAYING.
+- GamePhase.PLAYING: Active player must put down 1 to 3 same-suit cards.
+- GamePhase.CUTTING: Opponent must beat the played cards or PASS.
+- GamePhase.FORCED_CUT (Maliutka): Triggered when 3 non-trump same-suit cards are played.
+- BURA EXCEPTION: If `_is_three_trumps(cards)` is true during Play or Cut, the player instantly wins the round.
+"""
+
 import random
 from enum import Enum
 from abc import ABC, abstractmethod

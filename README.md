@@ -109,3 +109,15 @@ Human clicks Play
 Polling loop (lobby.js → startPolling())
   └─ every 1.2s: GET /state → if state changed → render()
 ```
+
+## Game Rules (BURA / Thirty-One / Cutter)
+**AI CONTEXT:** Use these exact rules to validate gameplay logic. If the code contradicts these rules, the code is bugged.
+
+*   **Setup:** 20 cards (A, T, K, Q, J in 4 suits). A=11, T=10, K=4, Q=3, J=2. 3 cards dealt each. Trump suit revealed at bottom. Game to 7 or 11 points.
+*   **Stakes:** Either player may raise (1 to 6). Declining a raise instantly awards the raiser the previous stake amount.
+*   **Turn/Playing:** Active player plays 1-3 cards of the SAME SUIT.
+*   **Cutting:** Defender must play the EXACT same number of cards. Must be same suit but higher value, OR a trump card. Trump beats non-trump.
+*   **Passing:** If unable to cut, defender passes the exact same number of cards face down. All cards go to the active player's score pile.
+*   **Maliutka:** Playing 3 same-suit *non-trump* cards. Forces the opponent to cut all 3.
+*   **Bura (3 Trumps):** Playing 3 *trump* cards instantly wins the round at any time, regardless of phase or turn priority.
+*   **Calculating:** Only the player who last took cards can calculate. If their pile is ≥ 31, they win. If < 31, they lose.

@@ -22,9 +22,11 @@ from room_manager import Room, rooms, make_room_code
 from bot_runner import bot_act_if_needed
 from bvb_runner import bvb_step, bvb_run_full
 from bot import get_bot, list_bots
+from advanced_bots import get_advanced_bot, list_advanced_bots, ADVANCED_BOT_REGISTRY
 from sim_runner import start_simulation, get_sim_status, cancel_simulation, simulations
-
-
+from bot_runner import notify_human_action
+from bot import list_bots
+from advanced_bots import get_any_bot, list_all_bots
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, static_folder=BASE_DIR)
 
@@ -113,10 +115,9 @@ def _action(room_id: str, perspective_idx: int, fn):
 
 
 # ─── Bot list ─────────────────────────────────────────────────────────────────
-
 @app.route("/api/bots/list", methods=["GET"])
 def bots_list():
-    return ok(bots=list_bots())
+    return ok(bots=list_all_bots())
 
 
 # ─── Room management ─────────────────────────────────────────────────────────
@@ -226,7 +227,23 @@ def start_round(room_id: str):
 def offer_stake(room_id: str):
     body = request.get_json(silent=True) or {}
     pidx = int(body.get("player_idx", 0))
-    return _action(room_id, pidx, lambda: rooms[room_id.upper()].engine.offer_stake(pidx))
+
+    room, engine = _get_room(room_id)
+    if room is None:
+        return err("Room not found", 404)
+    if engine is None:
+        return err("Game not started yet.")
+
+    result = engine.offer_stake(pidx)
+    if not result:
+        return err(engine.error or "Action failed.")
+
+    if room.mode == "hvb":
+        from bot_runner import notify_human_action
+        notify_human_action(engine, "raise")
+        bot_act_if_needed(engine)
+
+    return ok(state=engine.get_state(perspective_idx=pidx))
 
 @app.route("/api/room/<room_id>/accept_stake", methods=["POST"])
 def accept_stake(room_id: str):
@@ -238,7 +255,23 @@ def accept_stake(room_id: str):
 def decline_stake(room_id: str):
     body = request.get_json(silent=True) or {}
     pidx = int(body.get("player_idx", 0))
-    return _action(room_id, pidx, lambda: rooms[room_id.upper()].engine.decline_stake(pidx))
+
+    room, engine = _get_room(room_id)
+    if room is None:
+        return err("Room not found", 404)
+    if engine is None:
+        return err("Game not started yet.")
+
+    result = engine.decline_stake(pidx)
+    if not result:
+        return err(engine.error or "Action failed.")
+
+    if room.mode == "hvb":
+        from bot_runner import notify_human_action
+        notify_human_action(engine, "decline")
+        # No bot_act_if_needed here — round ends on decline
+
+    return ok(state=engine.get_state(perspective_idx=pidx))
 
 
 # ─── Card play routes ─────────────────────────────────────────────────────────
@@ -307,9 +340,26 @@ def pass_cards(room_id: str):
     body  = request.get_json(silent=True) or {}
     pidx  = int(body.get("player_idx", 0))
     cards = body.get("cards", [])
-    return _action(room_id, pidx, lambda: rooms[room_id.upper()].engine.pass_cards(pidx, cards))
 
+    room, engine = _get_room(room_id)
+    if room is None:
+        return err("Room not found", 404)
+    if engine is None:
+        return err("Game not started yet.")
 
+    # Capture played_cards BEFORE engine clears them
+    played_snapshot = list(engine.played_cards)
+
+    result = engine.pass_cards(pidx, cards)
+    if not result:
+        return err(engine.error or "Action failed.")
+
+    if room.mode == "hvb":
+        from bot_runner import notify_human_action
+        notify_human_action(engine, "pass", played_cards=played_snapshot)
+        bot_act_if_needed(engine)
+
+    return ok(state=engine.get_state(perspective_idx=pidx))
 # ─── Calculate routes ─────────────────────────────────────────────────────────
 
 @app.route("/api/room/<room_id>/calculate", methods=["POST"])
@@ -322,7 +372,23 @@ def calculate(room_id: str):
 def skip_calculate(room_id: str):
     body = request.get_json(silent=True) or {}
     pidx = int(body.get("player_idx", 0))
-    return _action(room_id, pidx, lambda: rooms[room_id.upper()].engine.skip_calculate(pidx))
+
+    room, engine = _get_room(room_id)
+    if room is None:
+        return err("Room not found", 404)
+    if engine is None:
+        return err("Game not started yet.")
+
+    result = engine.skip_calculate(pidx)
+    if not result:
+        return err(engine.error or "Action failed.")
+
+    if room.mode == "hvb":
+        from bot_runner import notify_human_action
+        notify_human_action(engine, "skip_calculate")
+        bot_act_if_needed(engine)
+
+    return ok(state=engine.get_state(perspective_idx=pidx))
 
 
 # ─── Debug / dev routes ───────────────────────────────────────────────────────
@@ -367,12 +433,12 @@ def create_bvb():
     room    = Room(room_id, f"Bot A", "bvb", target)
     rooms[room_id] = room
 
-    bots = list_bots()
+    bots = list_all_bots()  # <--- Changed this so it loads advanced bot names too!
     name_a = next((b["name"] for b in bots if b["id"] == bot_a_id), bot_a_id)
     name_b = next((b["name"] for b in bots if b["id"] == bot_b_id), bot_b_id)
 
-    p1 = get_bot(bot_a_id, "p1", name_a)
-    p2 = get_bot(bot_b_id, "p2", name_b)
+    p1 = get_any_bot(bot_a_id, "p1", name_a)
+    p2 = get_any_bot(bot_b_id, "p2", name_b)
     room.engine = GameEngine(p1, p2, target_score=target)
     room.engine.start_round()
     room.status = "playing"
@@ -424,22 +490,26 @@ def bvb_run_route(room_id: str):
 @app.route("/api/sim/start", methods=["POST"])
 def sim_start():
     body     = request.get_json(silent=True) or {}
-    bot_ids  = body.get("bot_ids", [])
+    pairs    = body.get("pairs", [])
     games    = int(body.get("games_per_matchup", 1000))
     target   = int(body.get("target_score", 7))
 
-    if len(bot_ids) < 2:
-        return err("Need at least 2 bots.")
+    if not pairs:
+        return err("Need at least 1 matchup.")
     if games < 1 or games > 100000:
         return err("games_per_matchup must be 1–100000.")
 
     # Validate bot ids
     from bot import BOT_REGISTRY
-    for bid in bot_ids:
-        if bid not in BOT_REGISTRY:
-            return err(f"Unknown bot: {bid}")
+    from advanced_bots import ADVANCED_BOT_REGISTRY
+    try:
+        from optimal_bots import OPTIMAL_BOT_REGISTRY
+    except ImportError:
+        OPTIMAL_BOT_REGISTRY = {}
 
-    sim_id = start_simulation(bot_ids, games, target)
+    _all = {**BOT_REGISTRY, **ADVANCED_BOT_REGISTRY, **OPTIMAL_BOT_REGISTRY}
+
+    sim_id = start_simulation(pairs, games, target)
     return ok(sim_id=sim_id)
 
 

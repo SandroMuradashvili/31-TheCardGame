@@ -20,6 +20,7 @@ from game_engine import (
 )
 
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Shared helpers
 # ══════════════════════════════════════════════════════════════════════════════
@@ -243,32 +244,31 @@ class BeliefTracker:
     """
 
     def __init__(self, engine: GameEngine, my_idx: int):
-        me  = engine.players[my_idx]
+        me = engine.players[my_idx]
         opp = engine.players[1 - my_idx]
 
         my_hand_ids: set[str] = {repr(c) for c in me.hand}
 
         # Everything this player has personally observed
         seen: set[str] = set(me.seen_card_ids)
+
         # Trump card is globally visible
         if engine.deck.trump_card:
             seen.add(repr(engine.deck.trump_card))
+
         # Cards on table are globally visible
         for c in engine.played_cards:
             seen.add(repr(c))
 
         # Unseen = all 20 cards minus my hand minus everything observed
-        self.unseen: set[str] = ALL_CARD_IDS - seen - my_hand_ids
-        # Remove table cards from unseen (they're visible, not in hand/deck)
-        for c in engine.played_cards:
-            self.unseen.discard(repr(c))
+        # Wrap in set() to ensure it's a standard mutable set, not a frozenset
+        self.unseen: set[str] = set(ALL_CARD_IDS - seen - my_hand_ids)
 
-        self.opp_hand_size: int  = len(opp.hand)
-        self.unseen_count:  int  = len(self.unseen)
-        self.trump_suit           = engine.trump_suit
-        self._rank_map            = {r.value: r for r in Rank}
-        self._suit_map            = {s.value[0].upper(): s for s in Suit}
-
+        self.opp_hand_size: int = len(opp.hand)
+        self.unseen_count: int = len(self.unseen)
+        self.trump_suit = engine.trump_suit
+        self._rank_map = {r.value: r for r in Rank}
+        self._suit_map = {s.value[0].upper(): s for s in Suit}
     def p_card_in_opp_hand(self, card_id: str) -> float:
         """P(card_id is in opponent's hand)."""
         if card_id not in self.unseen or self.unseen_count == 0:
@@ -339,16 +339,22 @@ def _hyper_p_none(non_special: int, special: int, draws: int) -> float:
     """
     P(drawing `draws` cards from (non_special + special) without hitting
     any special card) = C(non_special, draws) / C(total, draws).
-    Computed in log-space to avoid overflow.
+    Uses exact integer combinatorics to prevent floating point domain crashes.
     """
     total = non_special + special
     if draws > non_special or draws > total:
         return 0.0
-    lp = (math.lgamma(non_special + 1) - math.lgamma(draws + 1)
-          - math.lgamma(non_special - draws + 1)
-          - math.lgamma(total + 1) + math.lgamma(draws + 1)
-          + math.lgamma(total - draws + 1))
-    return math.exp(lp)
+    if total == 0:
+        return 1.0
+
+    try:
+        numerator = math.comb(non_special, draws)
+        denominator = math.comb(total, draws)
+        if denominator == 0:
+            return 0.0
+        return numerator / denominator
+    except ValueError:
+        return 0.0
 
 
 # ══════════════════════════════════════════════════════════════════════════════

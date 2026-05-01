@@ -256,15 +256,15 @@ async function init() {
   _bots = data.bots || [];
   _populateBotSelects();
 }
-
 function _populateBotSelects() {
   ['add-bot-a', 'add-bot-b'].forEach(id => {
     const sel = document.getElementById(id);
-    sel.innerHTML = _bots.map(b => `<option value="${b}">${b}</option>`).join('');
+    // Use b.id for the backend value, and b.name for the UI display
+    sel.innerHTML = _bots.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
   });
   // Default second select to second bot if available
   const selB = document.getElementById('add-bot-b');
-  if (_bots.length > 1) selB.value = _bots[1];
+  if (_bots.length > 1) selB.value = _bots[1].id;
 }
 
 // ── Matchup management ────────────────────────
@@ -284,7 +284,8 @@ function addAllPairs() {
   const added = [];
   for (let i = 0; i < _bots.length; i++) {
     for (let j = i+1; j < _bots.length; j++) {
-      const a = _bots[i], b = _bots[j];
+      // Extract the .id from the bot objects
+      const a = _bots[i].id, b = _bots[j].id;
       const dup = _matchups.some(m => (m.a===a&&m.b===b)||(m.a===b&&m.b===a));
       if (!dup) { _matchups.push({a,b}); added.push(`${a} vs ${b}`); }
     }
@@ -298,21 +299,28 @@ function removeMatchup(idx) {
   renderMatchupList();
 }
 
+// Add this helper right above renderMatchupList
+function getBotName(id) {
+  const b = _bots.find(x => x.id === id);
+  return b ? b.name : id;
+}
+
+// Replace the buggy renderMatchupList with this safe version
 function renderMatchupList() {
   const el = document.getElementById('matchup-list');
-  const em = document.getElementById('matchup-empty');
+
   if (!_matchups.length) {
-    el.innerHTML = '';
-    el.appendChild(em);
-    em.style.display = '';
+    // Safely recreate the empty state if there are no matchups
+    el.innerHTML = '<div class="empty-state" id="matchup-empty">No matchups added yet.</div>';
     return;
   }
-  em.style.display = 'none';
+
+  // Render the list without relying on hiding elements
   el.innerHTML = _matchups.map((m,i) => `
     <div class="matchup-row">
-      <span class="m-a">${m.a}</span>
+      <span class="m-a">${getBotName(m.a)}</span>
       <span class="m-vs">vs</span>
-      <span class="m-b">${m.b}</span>
+      <span class="m-b">${getBotName(m.b)}</span>
       <button class="matchup-del" onclick="removeMatchup(${i})" title="Remove">✕</button>
     </div>
   `).join('');
@@ -371,18 +379,102 @@ async function _poll() {
 
   updateLivePanel(data);
 
-  if (data.done) {
+  // When the simulation finishes, build the charts data safely
+  if (data.status === 'done' || data.done) {
     stopPoll();
-    // Fetch full result
-    const rRes  = await fetch(`/api/sim/result/${_simId}`);
-    const rData = await rRes.json();
-    if (rData.success) {
-      _lastResult = rData;
-      renderResults(rData);
-    }
+    const rData = _buildResultFromStatus(data);
+    _lastResult = rData;
+    renderResults(rData);
   }
 }
 
+function _buildResultFromStatus(d) {
+  const matchupsData = [];
+  const botAgg = {};
+
+  // Helper to init aggregate stats
+  function getAgg(id) {
+    if (!botAgg[id]) botAgg[id] = { games:0, wins:0, rounds:0, stake:0, raises:0, calcs:0, calcWins:0, calcPts:0, trumps:0, cuts:0, passes:0, counters:0 };
+    return botAgg[id];
+  }
+
+  d.matchups.forEach(m => {
+    const r = m.results;
+    if (!r) return;
+    const g = r.games_played || 1;
+
+    function formatStats(s) {
+      const cuts = s.cuts_per_game || 0;
+      const passes = s.passes_per_game || 0;
+      const totalCP = Math.max(cuts + passes, 0.001); // Prevent division by zero
+      return {
+        win_rate: s.win_rate,
+        wins: s.wins,
+        avg_rounds_per_game: r.avg_rounds_per_game,
+        avg_stake: r.avg_stake,
+        stake_raises: Math.round((s.raises_per_game || 0) * g),
+        stake_raise_rate: Math.round((s.raises_per_game || 0) * 100),
+        stake_declines: Math.round((s.declines_per_game || 0) * g),
+        calculate_attempts: Math.round((s.calc_attempts_per_game || 0) * g),
+        calculate_success_rate: s.calc_success_rate || 0,
+        avg_points_at_calculate: s.avg_pts_at_calc || 0,
+        three_trumps: Math.round((s.three_trumps_per_game || 0) * g),
+        cut_rate: Math.round((cuts / totalCP) * 100),
+        pass_rate: Math.round((passes / totalCP) * 100),
+        counter_plays: Math.round((s.counters_per_game || 0) * g)
+      };
+    }
+
+    const sa = formatStats(r.bot_a);
+    const sb = formatStats(r.bot_b);
+
+    matchupsData.push({
+      bot_a: r.bot_a_id, bot_b: r.bot_b_id, games: g, elapsed: d.elapsed_seconds,
+      stats_a: sa, stats_b: sb
+    });
+
+    // Aggregate Bot A totals
+    const aggA = getAgg(r.bot_a_id);
+    aggA.games += g; aggA.wins += sa.wins; aggA.rounds += r.avg_rounds_per_game * g;
+    aggA.stake += r.avg_stake * g; aggA.raises += sa.stake_raises; aggA.calcs += sa.calculate_attempts;
+    aggA.calcWins += Math.round((sa.calculate_success_rate/100) * sa.calculate_attempts);
+    aggA.calcPts += sa.avg_points_at_calculate * sa.calculate_attempts;
+    aggA.trumps += sa.three_trumps; aggA.cuts += (r.bot_a.cuts_per_game || 0) * g;
+    aggA.passes += (r.bot_a.passes_per_game || 0) * g; aggA.counters += sa.counter_plays;
+
+    // Aggregate Bot B totals
+    const aggB = getAgg(r.bot_b_id);
+    aggB.games += g; aggB.wins += sb.wins; aggB.rounds += r.avg_rounds_per_game * g;
+    aggB.stake += r.avg_stake * g; aggB.raises += sb.stake_raises; aggB.calcs += sb.calculate_attempts;
+    aggB.calcWins += Math.round((sb.calculate_success_rate/100) * sb.calculate_attempts);
+    aggB.calcPts += sb.avg_points_at_calculate * sb.calculate_attempts;
+    aggB.trumps += sb.three_trumps; aggB.cuts += (r.bot_b.cuts_per_game || 0) * g;
+    aggB.passes += (r.bot_b.passes_per_game || 0) * g; aggB.counters += sb.counter_plays;
+  });
+
+  const bot_summary = {};
+  Object.keys(botAgg).forEach(id => {
+    const a = botAgg[id];
+    const g = Math.max(a.games, 1);
+    const c = Math.max(a.calcs, 1);
+    const cp = Math.max(a.cuts + a.passes, 0.001);
+    bot_summary[id] = {
+      games: a.games,
+      win_rate: (a.wins / g * 100).toFixed(1),
+      avg_rounds_per_game: (a.rounds / g).toFixed(1),
+      avg_stake: (a.stake / g).toFixed(2),
+      stake_raise_rate: (a.raises / g * 100).toFixed(1),
+      calculate_success_rate: (a.calcWins / c * 100).toFixed(1),
+      avg_points_at_calculate: (a.calcPts / c).toFixed(1),
+      three_trumps: Math.round(a.trumps),
+      cut_rate: (a.cuts / cp * 100).toFixed(1),
+      pass_rate: (a.passes / cp * 100).toFixed(1),
+      counter_plays: Math.round(a.counters)
+    };
+  });
+
+  return { elapsed: d.elapsed_seconds, matchups: matchupsData, bot_summary };
+}
 // ── Live panel ────────────────────────────────
 function renderLivePanel(matchups) {
   const panel = document.getElementById('results-panel');
@@ -405,9 +497,9 @@ function renderLivePanel(matchups) {
     <div class="match-card" id="mc-${i}">
       <div class="mc-header">
         <div class="mc-bots">
-          <span class="mc-bot-a">${m.bot_a}</span>
+          <span class="mc-bot-a">${getBotName(m.bot_a)}</span>
           <span class="mc-vs">vs</span>
-          <span class="mc-bot-b">${m.bot_b}</span>
+          <span class="mc-bot-b">${getBotName(m.bot_b)}</span>
         </div>
         <span class="mc-pct" id="mc-pct-${i}">0%</span>
       </div>
@@ -423,17 +515,26 @@ function renderLivePanel(matchups) {
 }
 
 function updateLivePanel(data) {
-  // Overall
+  // Overall Progress (Mapped to Python's data structure)
   const obPct  = document.getElementById('ob-pct');
   const obFill = document.getElementById('ob-fill');
   const obEta  = document.getElementById('ob-eta');
   const obSpin = document.getElementById('ob-spinner');
-  if (obPct)  obPct.textContent  = `${data.progress}%`;
-  if (obFill) obFill.style.width = `${data.progress}%`;
-  if (obEta && data.eta)  obEta.textContent = `ETA: ${_fmtTime(data.eta)}`;
-  if (obSpin && data.done) obSpin.style.display = 'none';
+  const isDone = data.status === 'done';
 
-  // Per matchup
+  if (obPct)  obPct.textContent  = `${data.pct_done}%`;
+  if (obFill) obFill.style.width = `${data.pct_done}%`;
+
+  if (obEta) {
+      if (isDone) {
+          obEta.textContent = 'Finished';
+      } else if (data.eta_seconds != null) {
+          obEta.textContent = `ETA: ${_fmtTime(data.eta_seconds)}`;
+      }
+  }
+  if (obSpin && isDone) obSpin.style.display = 'none';
+
+  // Per matchup progress
   (data.matchups || []).forEach((m, i) => {
     const pct  = document.getElementById(`mc-pct-${i}`);
     const fill = document.getElementById(`mc-fill-${i}`);
@@ -441,15 +542,32 @@ function updateLivePanel(data) {
     const wb   = document.getElementById(`mc-wb-${i}`);
     const eta  = document.getElementById(`mc-eta-${i}`);
     const card = document.getElementById(`mc-${i}`);
-    if (pct)  pct.textContent  = `${m.progress}%`;
-    if (fill) { fill.style.width = `${m.progress}%`; if (m.done) fill.classList.add('done'); }
-    if (wa)   wa.textContent   = `${m.bot_a}: ${m.wins_a}W`;
-    if (wb)   wb.textContent   = `${m.bot_b}: ${m.wins_b}W`;
-    if (eta)  eta.textContent  = m.done ? '✓ Done' : (m.eta ? `ETA: ${_fmtTime(m.eta)}` : '');
-    if (card && m.done) card.classList.add('done');
+
+    // Calculate this specific matchup's progress
+    const mProg = Math.floor((m.games_done / m.games_total) * 100) || 0;
+    const mDone = m.status === 'done';
+
+    // Live wins are only returned when a matchup fully finishes in the background worker
+    const winsA = m.results ? m.results.bot_a.wins : 0;
+    const winsB = m.results ? m.results.bot_b.wins : 0;
+
+    if (pct)  pct.textContent  = `${mProg}%`;
+    if (fill) {
+        fill.style.width = `${mProg}%`;
+        if (mDone) fill.classList.add('done');
+    }
+
+    if (wa)   wa.textContent   = `${getBotName(m.bot_a_id)}: ${winsA}W`;
+    if (wb)   wb.textContent   = `${getBotName(m.bot_b_id)}: ${winsB}W`;
+
+    if (eta) {
+        if (mDone) eta.textContent = '✓ Done';
+        else eta.textContent = `${m.games_done} / ${m.games_total} games`;
+    }
+
+    if (card && mDone) card.classList.add('done');
   });
 }
-
 function _fmtTime(secs) {
   if (secs < 60) return `${Math.round(secs)}s`;
   return `${Math.floor(secs/60)}m ${Math.round(secs%60)}s`;

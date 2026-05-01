@@ -79,6 +79,10 @@ window.doPlayCards = async function() {
   State.prevPlayedKey = '';
   State.gameState = step1.state;
   render();
+
+  // BUG FIX: If playing BURA instantly ended the round, do NOT ask the bot to respond!
+  if (step1.state.phase === 'round_over' || step1.state.phase === 'game_over') return;
+
   setTimeout(_handleBotResponse, 400 + cards.length * 70);
 };
 
