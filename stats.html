@@ -347,7 +347,7 @@ async function runSim() {
   const res  = await fetch('/api/sim/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pairs, games, target_score: target }),
+    body: JSON.stringify({ pairs, games_per_matchup: games, target_score: target }),
   });
   const data = await res.json();
 

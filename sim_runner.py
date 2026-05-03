@@ -176,10 +176,10 @@ def _run_one_game(bot_a_id: str, bot_b_id: str, target_score: int) -> dict:
         for idx, bot in enumerate(engine.players):
             if (engine.stake_offerer_idx is not None
                     and engine.stake_offerer_idx != idx):
-                if engine.pending_stake <= 3:
-                    engine.accept_stake(idx)
-                else:
+                if hasattr(bot, 'choose_raise_stake') and not bot.choose_raise_stake(engine):
                     engine.decline_stake(idx)
+                else:
+                    engine.accept_stake(idx)
                 stake_handled = True
                 break
         if stake_handled:

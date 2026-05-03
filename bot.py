@@ -111,8 +111,32 @@ class SimpleBot(BotPlayer):
         if _opp_danger(engine, opp) == "danger": return True
         return False
 
+    def _is_strong_hand(self, engine: GameEngine) -> bool:
+        trump = engine.trump_suit
+        score = sum(c.points * (1.5 if c.suit == trump else 1.0) for c in self.hand)
+        return score >= 18.0
+
     def choose_raise_stake(self, engine: GameEngine) -> bool:
-        return False
+        my_idx = engine.players.index(self)
+        opp_idx = _opp_idx(engine, self)
+        danger = _opp_danger(engine, opp_idx)
+        my_tip = _tip(engine, my_idx)
+        
+        is_responding = engine.stake_offerer_idx is not None
+
+        if danger == "danger":
+            return False
+
+        if is_responding:
+            # Responding to opponent's raise
+            return self._is_strong_hand(engine) or my_tip["guaranteed_win"]
+        else:
+            # Offering a raise
+            if my_tip["guaranteed_win"]:
+                return True
+            if danger == "safe" and self._is_strong_hand(engine):
+                return True
+            return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -203,17 +227,31 @@ class AggressiveBot(BotPlayer):
         return expected >= threshold
 
     def choose_raise_stake(self, engine: GameEngine) -> bool:
-        opp    = _opp_idx(engine, self)
-        danger = _opp_danger(engine, opp)
-        if danger == "danger": return False
-
+        my_idx = engine.players.index(self)
+        opp_idx = _opp_idx(engine, self)
+        danger = _opp_danger(engine, opp_idx)
+        my_tip = _tip(engine, my_idx)
         strength = self._hand_strength(engine)
-        if strength >= 0.55: return True
+        
+        is_responding = engine.stake_offerer_idx is not None
 
-        my_tip = _tip(engine, engine.players.index(self))
-        if danger == "safe" and my_tip["can_possibly_win"] and strength >= 0.35:
-            return True
-        return False
+        if danger == "danger": 
+            return False
+
+        if is_responding:
+            # Responding to a raise (don't fall for bluffs easily)
+            # Accept if we have a guaranteed win, or if our hand is reasonably strong
+            if my_tip["guaranteed_win"]: return True
+            if strength >= 0.40: return True  # Lowered from 0.55 to catch bluffs
+            if danger == "safe" and strength >= 0.30: return True
+            return False
+        else:
+            # Offering a raise
+            if my_tip["guaranteed_win"]: return True
+            if strength >= 0.55: return True
+            if danger == "safe" and my_tip["can_possibly_win"] and strength >= 0.45:
+                return True
+            return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -436,14 +474,33 @@ class EVBot(BotPlayer):
         return wins / self._MONTE_CARLO_SAMPLES
 
     def _p_win_round(self, engine: GameEngine) -> float:
-        """Rough P(I win this round) combining own MC win chance and opponent range."""
+        """Rough P(I win this round) combining own expected total vs opponent range."""
         my_idx  = engine.players.index(self)
         opp_idx = _opp_idx(engine, self)
+        me      = engine.players[my_idx]
+        
+        # 1. Estimate my expected total points (pile + hand potential)
+        my_pile_expected = me.known_pile_points
+        hc = me.hidden_card_count
+        if hc > 0:
+            unseen = self._belief(engine).unseen
+            if unseen:
+                avg_unseen = sum(CARD_POINTS[c] for c in unseen) / len(unseen)
+                my_pile_expected += hc * avg_unseen
+                
+        trump = engine.trump_suit
+        # Rough hand value: trumps are more likely to win tricks, non-trumps less so
+        hand_value = sum(c.points * (1.2 if c.suit == trump else 0.5) for c in me.hand)
+        my_expected = my_pile_expected + hand_value
+        
+        # 2. Estimate opponent pile
         opp_tip = _tip(engine, opp_idx)
-        opp_mid = (opp_tip["min_total"] + opp_tip["max_total"]) / 2
-        p_opp_wins = 1 / (1 + math.exp(-(opp_mid - 31) / 4))
-        p_i_win    = self._p_own_win(engine)
-        return p_i_win * (1 - p_opp_wins)
+        opp_expected = (opp_tip["min_total"] + opp_tip["max_total"]) / 2
+        
+        # 3. Logistic probability based on point difference
+        diff = my_expected - opp_expected
+        # If difference is +8 points, P(win) ~ 73%. If 0, P(win) = 50%.
+        return 1 / (1 + math.exp(-diff / 8))
 
     # ── Play ─────────────────────────────────────────────────────────────────
 
