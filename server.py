@@ -138,7 +138,7 @@ def create_room():
     join_link = f"http://{local_ip}:{port}/join/{room_id}"
 
     if mode == "hvb":
-        room.start_game()
+        room.start_game(bot_id)
         return ok(room_id=room_id, join_link=join_link, status="playing", player_idx=0)
     else:
         return ok(room_id=room_id, join_link=join_link, status="waiting", player_idx=0)

@@ -95,6 +95,7 @@ window.showLobby = function() {
   document.getElementById('game-ui').style.display = 'none';
   document.getElementById('bvb-ui').style.display  = 'none';
   document.getElementById('room-waiting').style.display = 'none';
+  document.getElementById('round-modal').classList.remove('visible');
   const createBtn = document.querySelector('#tab-create-content .btn');
   if (createBtn) createBtn.disabled = false;
   State.roomId        = null;

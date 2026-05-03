@@ -268,16 +268,27 @@ window.showRoundModal = function(s) {
   const scores = document.getElementById('modal-scores');
   const btn    = document.getElementById('modal-btn');
 
-  if (isGameOver) {
+  const closeBtn = document.getElementById('modal-btn-close');
+
+   if (isGameOver) {
     title.textContent = `🏆 ${winner.name} Wins!`;
     title.className   = `modal-title ${iWon ? 'win' : 'lose'}`;
     sub.textContent   = `${winner.name} reached ${s.target_score} points. Game over!`;
     btn.textContent   = 'Play Again';
     btn.disabled      = false;
     btn.onclick       = showLobby;
+
+    // 2. Show the Close button and make it hide the modal when clicked
+    if (closeBtn) {
+      closeBtn.style.display = 'block';
+      closeBtn.onclick = () => document.getElementById('round-modal').classList.remove('visible');
+    }
   } else {
     title.textContent = iWon ? '✓ You Win!' : `${winner.name} Wins`;
     title.className   = `modal-title ${iWon ? 'win' : 'lose'}`;
+
+     if (closeBtn) closeBtn.style.display = 'none';
+
     const reasons = {
       calculated_win:  iWon ? 'You calculated 31+ and won!'           : `${winner.name} calculated 31+.`,
       calculated_lose: iWon ? `${s.players[1-wIdx].name} counted but fell short.` : 'You counted but had less than 31.',

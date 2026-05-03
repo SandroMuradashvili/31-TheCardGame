@@ -66,9 +66,10 @@ class Room:
                """
         p1 = HumanPlayer("p1", self.host_name)
         if self.mode == "hvb":
-            from bot import BOT_REGISTRY
-            name = getattr(BOT_REGISTRY.get(bot_id, SimpleBot), "DISPLAY_NAME", bot_id)
-            p2 = get_bot(bot_id, "p2", name)
+            from advanced_bots import get_any_bot, list_all_bots
+            bots = list_all_bots()
+            name = next((b["name"] for b in bots if b["id"] == bot_id), bot_id)
+            p2 = get_any_bot(bot_id, "p2", name)
         else:
             p2 = HumanPlayer("p2", self.guest_name)
 
