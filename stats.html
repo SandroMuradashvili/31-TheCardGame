@@ -412,16 +412,16 @@ function _buildResultFromStatus(d) {
         wins: s.wins,
         avg_rounds_per_game: r.avg_rounds_per_game,
         avg_stake: r.avg_stake,
-        stake_raises: Math.round((s.raises_per_game || 0) * g),
+        stake_raises: s.raises !== undefined ? s.raises : Math.round((s.raises_per_game || 0) * g),
         stake_raise_rate: Math.round((s.raises_per_game || 0) * 100),
-        stake_declines: Math.round((s.declines_per_game || 0) * g),
-        calculate_attempts: Math.round((s.calc_attempts_per_game || 0) * g),
+        stake_declines: s.declines !== undefined ? s.declines : Math.round((s.declines_per_game || 0) * g),
+        calculate_attempts: s.calc_attempts !== undefined ? s.calc_attempts : Math.round((s.calc_attempts_per_game || 0) * g),
         calculate_success_rate: s.calc_success_rate || 0,
         avg_points_at_calculate: s.avg_pts_at_calc || 0,
-        three_trumps: Math.round((s.three_trumps_per_game || 0) * g),
+        three_trumps: s.three_trumps !== undefined ? s.three_trumps : Math.round((s.three_trumps_per_game || 0) * g),
         cut_rate: Math.round((cuts / totalCP) * 100),
         pass_rate: Math.round((passes / totalCP) * 100),
-        counter_plays: Math.round((s.counters_per_game || 0) * g)
+        counter_plays: s.counters !== undefined ? s.counters : Math.round((s.counters_per_game || 0) * g)
       };
     }
 

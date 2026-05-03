@@ -318,41 +318,6 @@ def _rollout(sim: GameEngine, my_idx: int, bot_cls_map: dict) -> float:
     return 1.0 if winner == my_idx else -1.0
 
 
-def _make_simple_bots(engine: GameEngine) -> dict:
-    """Build a {idx: BotInstance} map using SimpleBot for both players."""
-    bots = {}
-    for i, p in enumerate(engine.players):
-        b = SimpleBot(p.player_id, p.name)
-        b.hand = p.hand  # point at the simulation player's hand
-        bots[i] = b
-    return bots
-
-
-def _make_aggressive_bots(engine: GameEngine) -> dict:
-    bots = {}
-    for i, p in enumerate(engine.players):
-        b = AggressiveBot(p.player_id, p.name)
-        b.hand = p.hand
-        bots[i] = b
-    return bots
-
-
-def _make_ev_bots(engine: GameEngine) -> dict:
-    bots = {}
-    for i, p in enumerate(engine.players):
-        b = EVBot(p.player_id, p.name)
-        b.hand = p.hand
-        bots[i] = b
-    return bots
-
-
-def _sync_bot_hands(sim: GameEngine, bot_map: dict):
-    """Keep bot hand references pointing at the simulation player hands."""
-    for i, p in enumerate(sim.players):
-        if i in bot_map:
-            bot_map[i].hand = p.hand
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # Action enumeration  (what moves can the active player make?)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -410,6 +375,10 @@ def _enumerate_calculate_actions(engine: GameEngine) -> list[tuple]:
 
 
 def _enumerate_stake_actions(engine: GameEngine, player_idx: int) -> list[tuple]:
+    is_responding = engine.stake_offerer_idx is not None and engine.stake_offerer_idx != player_idx
+    if is_responding:
+        return [("accept", []), ("decline", [])]
+    
     actions = [("play", [])]  # just start playing (no raise)
     if engine.can_raise_stake(player_idx):
         actions.append(("raise", []))
@@ -445,13 +414,24 @@ def _apply_action(sim: GameEngine, my_idx: int, action: tuple) -> bool:
         if ok:
             # Opponent auto-responds with SimpleBot logic
             opp_idx = 1 - my_idx
-            opp_b = SimpleBot(sim.players[opp_idx].player_id, "opp")
-            opp_b.hand = sim.players[opp_idx].hand
-            if opp_b.choose_raise_stake(sim):
+            
+            # Temporarily replace the player class so index(self) works and state is preserved
+            orig_class = sim.players[opp_idx].__class__
+            sim.players[opp_idx].__class__ = SimpleBot
+            
+            if sim.players[opp_idx].choose_raise_stake(sim):
                 sim.accept_stake(opp_idx)
             else:
                 sim.decline_stake(opp_idx)
+                
+            sim.players[opp_idx].__class__ = orig_class
         return ok
+
+    if act_type == "accept":
+        return sim.accept_stake(my_idx)
+
+    if act_type == "decline":
+        return sim.decline_stake(my_idx)
 
     if act_type == "cut":
         ok = sim.cut_cards(my_idx, card_ids)
@@ -531,12 +511,11 @@ class PIMCBot(BotPlayer):
                 if not ok:
                     continue
 
-                # Build rollout bots — simple for speed
+                # Build rollout bots — transform cloned players into SimpleBots
                 bots = {}
                 for i, p in enumerate(sim.players):
-                    b = SimpleBot(p.player_id, p.name)
-                    b.hand = p.hand
-                    bots[i] = b
+                    p.__class__ = SimpleBot
+                    bots[i] = p
 
                 reward = _rollout(sim, my_idx, bots)
                 totals[action] += reward
@@ -582,12 +561,18 @@ class PIMCBot(BotPlayer):
         return best[0] == "calculate"
 
     def choose_raise_stake(self, engine: GameEngine) -> bool:
-        my_idx  = self._my_idx(engine)
-        if not engine.can_raise_stake(my_idx):
+        my_idx = self._my_idx(engine)
+        is_responding = engine.stake_offerer_idx is not None and engine.stake_offerer_idx != my_idx
+        
+        if not is_responding and not engine.can_raise_stake(my_idx):
             return False
+            
         actions = _enumerate_stake_actions(engine, my_idx)
         best    = self._best_action(engine, actions)
-        return best[0] == "raise"
+        if is_responding:
+            return best[0] == "accept"
+        else:
+            return best[0] == "raise"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -686,11 +671,10 @@ class ISMCTSBot(BotPlayer):
         bots = {}
         for i, p in enumerate(sim.players):
             if self.ROLLOUT_POLICY == "ev":
-                b = EVBot(p.player_id, p.name)
+                p.__class__ = EVBot
             else:
-                b = AggressiveBot(p.player_id, p.name)
-            b.hand = p.hand
-            bots[i] = b
+                p.__class__ = AggressiveBot
+            bots[i] = p
         return bots
 
     def _run_ismcts(
@@ -727,7 +711,6 @@ class ISMCTSBot(BotPlayer):
                 if actor != my_idx:
                     # Opponent move — just apply opponent bot decision
                     bots = self._build_rollout_bots(sim)
-                    _sync_bot_hands(sim, bots)
                     ok = _apply_bot_decision(sim, bots)
                     if not ok:
                         break
@@ -775,7 +758,6 @@ class ISMCTSBot(BotPlayer):
 
             # ── 4. Rollout ────────────────────────────────────────────────
             bots = self._build_rollout_bots(sim)
-            _sync_bot_hands(sim, bots)
             reward = _rollout(sim, my_idx, bots)
 
             # ── 5. Backpropagate ──────────────────────────────────────────
@@ -821,11 +803,17 @@ class ISMCTSBot(BotPlayer):
 
     def choose_raise_stake(self, engine: GameEngine) -> bool:
         my_idx = self._my_idx(engine)
-        if not engine.can_raise_stake(my_idx):
+        is_responding = engine.stake_offerer_idx is not None and engine.stake_offerer_idx != my_idx
+        
+        if not is_responding and not engine.can_raise_stake(my_idx):
             return False
+            
         root   = self._run_ismcts(engine, my_idx, self.NUM_ITERATIONS // 4)
         action = self._best_root_action(root)
-        return action[0] == "raise"
+        if is_responding:
+            return action[0] == "accept"
+        else:
+            return action[0] == "raise"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -900,14 +888,20 @@ class ISMCTSBeliefBot(ISMCTSBot):
 
     def choose_raise_stake(self, engine: GameEngine) -> bool:
         my_idx = self._my_idx(engine)
-        if not engine.can_raise_stake(my_idx):
+        is_responding = engine.stake_offerer_idx is not None and engine.stake_offerer_idx != my_idx
+        
+        if not is_responding and not engine.can_raise_stake(my_idx):
             return False
+            
         root   = self._run_ismcts(
             engine, my_idx, self.NUM_ITERATIONS // 4,
             world_sampler=self._world_sampler
         )
         action = self._best_root_action(root)
-        return action[0] == "raise"
+        if is_responding:
+            return action[0] == "accept"
+        else:
+            return action[0] == "raise"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -133,12 +133,19 @@ class MatchStats:
             result[label] = {
                 "wins":              self.wins[i],
                 "win_rate":          pct(self.wins[i], g),
+                "raises":            self.raises[i],
                 "raises_per_game":   per_game(self.raises[i]),
+                "declines":          self.declines[i],
                 "declines_per_game": per_game(self.declines[i]),
+                "cuts":              self.cuts[i],
                 "cuts_per_game":     per_game(self.cuts[i]),
+                "passes":            self.passes[i],
                 "passes_per_game":   per_game(self.passes[i]),
+                "counters":          self.counters[i],
                 "counters_per_game": per_game(self.counters[i]),
+                "three_trumps":      self.three_trumps[i],
                 "three_trumps_per_game": per_game(self.three_trumps[i]),
+                "calc_attempts":     self.calculates[i],
                 "calc_attempts_per_game": per_game(self.calculates[i]),
                 "calc_success_rate": pct(self.calc_wins[i], ca),
                 "calc_bluff_rate":   pct(self.calc_losses[i], ca),
@@ -272,6 +279,10 @@ def _run_matchup(sim_id: str, matchup_idx: int,
 
         # Update progress
         sim["matchups"][matchup_idx]["games_done"] = g + 1
+        
+        # Periodically push live results so the UI can show live wins
+        if (g + 1) % 50 == 0:
+            sim["matchups"][matchup_idx]["results"] = stats.to_dict()
 
     sim["matchups"][matchup_idx]["status"]  = "done"
     sim["matchups"][matchup_idx]["results"] = stats.to_dict()
